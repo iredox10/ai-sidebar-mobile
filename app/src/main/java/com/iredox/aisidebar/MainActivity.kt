@@ -165,6 +165,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     var customBaseUrl by remember { mutableStateOf(savedProviderSettings.customBaseUrl) }
     var customName by remember { mutableStateOf(savedProviderSettings.customName) }
     var customModels by remember { mutableStateOf(savedProviderSettings.customModels) }
+    var tavilyKey by remember { mutableStateOf(secureKeyStore.readKey(SecureKeyStore.KEY_TAVILY).orEmpty()) }
     var activeConversationId by remember { mutableStateOf(chatStore.activeConversationId() ?: System.currentTimeMillis()) }
     var conversationHistory by remember { mutableStateOf(chatStore.loadHistory()) }
     val messages = remember {
@@ -267,7 +268,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         when (destination) {
             Destination.CHAT -> ChatScreen(
                 Modifier.padding(padding), messages, provider, apiKey, endpoint, model,
-                systemPrompt, temperature, customBaseUrl,
+                systemPrompt, temperature, customBaseUrl, tavilyKey,
                 persistMessages, sharedText, onSharedTextConsumed
             )
             Destination.HISTORY -> ChatHistory(
@@ -323,6 +324,10 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                     val current = providerSettingsStore.read()
                     providerSettingsStore.write(current.copy(customModels = it))
                 },
+                tavilyKey, {
+                    tavilyKey = it
+                    secureKeyStore.writeKey(SecureKeyStore.KEY_TAVILY, it)
+                },
                 chatStore
             )
         }
@@ -348,6 +353,7 @@ private fun ChatScreen(
     systemPrompt: String,
     temperature: Float,
     customBaseUrl: String,
+    tavilyKey: String,
     onMessagesChanged: () -> Unit,
     sharedText: String?,
     onSharedTextConsumed: () -> Unit
@@ -568,7 +574,7 @@ private fun ChatScreen(
                         if (query.isBlank()) screenContextNote = "Write a search query first."
                         else {
                             screenContextNote = "Searching the web…"
-                            webSearchClient.search(query, { results ->
+                            webSearchClient.search(query, tavilyKey.takeIf { it.isNotBlank() }, { results ->
                                 if (results.isEmpty()) screenContextNote = "No web results were found."
                                 else {
                                     val contextBlock = buildString {
@@ -1067,6 +1073,8 @@ private fun SettingsScreen(
     onCustomNameChange: (String) -> Unit,
     customModels: String,
     onCustomModelsChange: (String) -> Unit,
+    tavilyKey: String,
+    onTavilyKeyChange: (String) -> Unit,
     chatStore: ChatStore
 ) {
     val context = LocalContext.current
@@ -1213,6 +1221,17 @@ private fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("${provider.lowercase().replaceFirstChar { it.uppercase() }} API key") },
                 placeholder = { Text(if (provider == "custom") "Optional for local servers" else "Encrypted on this device") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = tavilyKey,
+                onValueChange = onTavilyKeyChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Tavily API key (web search)") },
+                placeholder = { Text("tvly-...  (optional, falls back to DuckDuckGo)") },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true
             )

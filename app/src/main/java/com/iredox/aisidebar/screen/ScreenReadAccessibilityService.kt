@@ -22,18 +22,35 @@ class ScreenReadAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    fun captureVisibleText(maxCharacters: Int = 8_000): ScreenContext {
+    fun captureVisibleText(maxCharacters: Int = 12_000): ScreenContext {
         val packageName = rootInActiveWindow?.packageName?.toString()
-        val text = buildString { rootInActiveWindow?.appendSafeText(this, maxCharacters) }
-        return ScreenContext(packageName = packageName, visibleText = text)
+        val seen = mutableSetOf<String>()
+        val text = buildString { rootInActiveWindow?.appendSafeText(this, seen, maxCharacters) }
+        return ScreenContext(packageName = packageName, visibleText = text.trim().take(maxCharacters))
     }
 
-    private fun AccessibilityNodeInfo.appendSafeText(target: StringBuilder, limit: Int) {
+    private fun AccessibilityNodeInfo.appendSafeText(target: StringBuilder, seen: MutableSet<String>, limit: Int) {
         if (target.length >= limit || isPassword || !isVisibleToUser) return
-        text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { value ->
-            if (!target.contains(value)) target.append(value).append('\n')
+        // collect primary text or contentDescription or hint
+        val candidates = listOfNotNull(
+            text?.toString()?.trim()?.takeIf { it.isNotEmpty() },
+            contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() },
+            hintText?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        )
+        for (value in candidates) {
+            if (value.length < 2 || value.length > 500) continue
+            if (seen.add(value)) {
+                if (target.isNotEmpty() && !target.endsWith("\n")) target.append(' ')
+                target.append(value)
+                if (value.endsWith(".") || value.endsWith("!") || value.endsWith("?")) target.append('\n')
+                else target.append(' ')
+            }
+            break // only first non-empty candidate per node to avoid duplication
         }
-        for (index in 0 until childCount) getChild(index)?.appendSafeText(target, limit)
+        for (index in 0 until childCount) {
+            if (target.length >= limit) break
+            getChild(index)?.appendSafeText(target, seen, limit)
+        }
     }
 
     companion object {
