@@ -355,11 +355,12 @@ private fun ChatScreen(
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     var screenContextNote by remember { mutableStateOf<String?>(null) }
     var imageDataUrl by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     val openAiClient = remember { OpenAiCompatibleClient() }
     val anthropicClient = remember { AnthropicClient() }
     val googleClient = remember { GoogleClient() }
     val webSearchClient = remember { WebSearchClient() }
-    val context = LocalContext.current
+    val usageStore = remember { com.iredox.aisidebar.data.UsageStore(context.applicationContext) }
     var attachmentMenuOpen by remember { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -440,10 +441,13 @@ private fun ChatScreen(
         onComplete: () -> Unit,
         onError: (String) -> Unit
     ): StreamingRequest {
-        return when (provider.lowercase()) {
-            "anthropic" -> anthropicClient.streamChat(config, msgs, onDelta, onComplete, onError)
-            "google" -> googleClient.streamChat(config, msgs, onDelta, onComplete, onError)
-            else -> openAiClient.streamChat(config, msgs, onDelta, onComplete, onError)
+        val p = provider.lowercase()
+        val m = model
+        val usageCallback: (Long?, Long?) -> Unit = { pt, ct -> usageStore.record(p, m, pt, ct) }
+        return when (p) {
+            "anthropic" -> anthropicClient.streamChat(config, msgs, onDelta, onComplete, onError, usageCallback)
+            "google" -> googleClient.streamChat(config, msgs, onDelta, onComplete, onError, usageCallback)
+            else -> openAiClient.streamChat(config, msgs, onDelta, onComplete, onError, usageCallback)
         }
     }
     fun regenerate(responseIndex: Int) {
@@ -901,6 +905,8 @@ private fun SettingsScreen(
     var profileMenuOpen by remember { mutableStateOf(false) }
     var profileRenameOpen by remember { mutableStateOf(false) }
     var profileRenameText by remember { mutableStateOf("") }
+    val usageStore = remember { com.iredox.aisidebar.data.UsageStore(context.applicationContext) }
+    var usageTick by remember { mutableStateOf(0) }
     val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -1161,6 +1167,48 @@ private fun SettingsScreen(
             }
             exportStatus?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp)) }
             Text("Backups contain chats only. API keys are never exported or imported.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Text("Usage & Cost", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            // trigger recomposition after clear
+            usageTick.let {
+                val agg1 = usageStore.aggregate(1)
+                val agg7 = usageStore.aggregate(7)
+                val agg30 = usageStore.aggregate(30)
+                val aggAll = usageStore.aggregate(9999)
+                fun money(c: Double) = if (c > 0.01) "$${String.format(Locale.US, "%.2f", c)}" else if (c > 0) "$${String.format(Locale.US,"%.4f", c)}" else "$0.00"
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Today" to agg1, "7 days" to agg7, "All" to aggAll).forEach { (label, agg) ->
+                            Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                                Column(Modifier.padding(8.dp)) {
+                                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(money(agg.totals.cost), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("${agg.totals.count} msgs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    val perModel = aggAll.perModel.entries.sortedByDescending { it.value.cost }
+                    if (perModel.isEmpty()) {
+                        Text("No usage recorded yet. Send messages to see cost estimates.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            perModel.forEach { (key, e) ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(key, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(money(e.cost), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text("in ${e.`in`} / out ${e.out} — ${e.count} msgs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { usageStore.clear(); usageTick++ }) { Text("Clear usage") }
+                        Text("${usageStore.dayCount()} days kept", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {

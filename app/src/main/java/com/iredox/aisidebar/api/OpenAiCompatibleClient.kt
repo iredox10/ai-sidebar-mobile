@@ -56,7 +56,8 @@ class OpenAiCompatibleClient {
         messages: List<RemoteChatMessage>,
         onDelta: (String) -> Unit,
         onComplete: () -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        onUsage: ((Long?, Long?) -> Unit)? = null
     ): StreamingRequest {
         val request = StreamingRequest()
         Thread {
@@ -94,16 +95,26 @@ class OpenAiCompatibleClient {
                     val detail = connection.errorStream?.bufferedReader()?.readText()?.let { runCatching { JSONObject(it).optJSONObject("error")?.optString("message") ?: it }.getOrNull() }?.take(600)
                     throw IllegalStateException(detail ?: "Request failed (${connection.responseCode}). Check the endpoint, model, and API key.")
                 }
+                var promptTok: Long? = null
+                var completionTok: Long? = null
                 connection.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         if (request.cancelled || line == "data: [DONE]") return@forEach
                         if (!line.startsWith("data: ")) return@forEach
                         val json = runCatching { JSONObject(line.removePrefix("data: ")) }.getOrNull() ?: return@forEach
+                        json.optJSONObject("usage")?.let {
+                            promptTok = it.optLong("prompt_tokens", -1).takeIf { v -> v >= 0 }
+                            completionTok = it.optLong("completion_tokens", -1).takeIf { v -> v >= 0 }
+                        }
                         val delta = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("delta")
                         val content = delta?.optString("content")?.takeIf { it.isNotEmpty() }
                             ?: delta?.optString("reasoning_content")?.takeIf { it.isNotEmpty() }
                         if (!content.isNullOrEmpty()) mainThread { onDelta(content) }
                     }
+                }
+                if (promptTok != null || completionTok != null) {
+                    val pt = promptTok; val ct = completionTok
+                    mainThread { onUsage?.invoke(pt, ct) }
                 }
                 if (!request.cancelled) mainThread(onComplete)
             } catch (error: Exception) {

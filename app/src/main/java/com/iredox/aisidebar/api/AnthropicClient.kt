@@ -17,7 +17,8 @@ class AnthropicClient {
         messages: List<RemoteChatMessage>,
         onDelta: (String) -> Unit,
         onComplete: () -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        onUsage: ((Long?, Long?) -> Unit)? = null
     ): StreamingRequest {
         val request = StreamingRequest()
         Thread {
@@ -53,6 +54,8 @@ class AnthropicClient {
                     val detail = connection.errorStream?.bufferedReader()?.readText()?.let { runCatching { JSONObject(it).optJSONObject("error")?.optString("message") ?: it }.getOrNull() } ?: "HTTP ${connection.responseCode}"
                     throw IllegalStateException(detail.take(600))
                 }
+                var promptTok: Long? = null
+                var completionTok: Long? = null
                 connection.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { raw ->
                         if (request.cancelled) return@forEach
@@ -61,10 +64,19 @@ class AnthropicClient {
                         if (!line.startsWith("data:")) return@forEach
                         val payload = line.removePrefix("data:").trim()
                         if (payload.isEmpty() || payload == "[DONE]") return@forEach
+                        runCatching { JSONObject(payload) }.getOrNull()?.let { json ->
+                            if (json.optString("type") == "message_delta") {
+                                json.optJSONObject("usage")?.let {
+                                    promptTok = it.optLong("input_tokens", -1).takeIf { v -> v >= 0 }
+                                    completionTok = it.optLong("output_tokens", -1).takeIf { v -> v >= 0 }
+                                }
+                            }
+                        }
                         val text = parseAnthropicDelta(payload) ?: return@forEach
                         if (text.isNotEmpty()) mainThread { onDelta(text) }
                     }
                 }
+                if (promptTok != null || completionTok != null) mainThread { onUsage?.invoke(promptTok, completionTok) }
                 if (!request.cancelled) mainThread(onComplete)
             } catch (e: Exception) {
                 if (!request.cancelled) mainThread { onError(e.message ?: "Anthropic request failed") }
