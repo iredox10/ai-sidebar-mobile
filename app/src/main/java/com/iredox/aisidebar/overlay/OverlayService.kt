@@ -26,6 +26,9 @@ import com.iredox.aisidebar.api.RemoteChatMessage
 import com.iredox.aisidebar.api.StreamingRequest
 import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.data.SecureKeyStore
+import com.iredox.aisidebar.data.ChatStore
+import com.iredox.aisidebar.data.StoredChatMessage
+import com.iredox.aisidebar.data.StoredConversation
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 
 /** A user-controlled foreground overlay. It never captures screen content by itself. */
@@ -36,6 +39,7 @@ class OverlayService : Service() {
     private var activeRequest: StreamingRequest? = null
     private val overlayMessages = mutableListOf<RemoteChatMessage>()
     private val client = OpenAiCompatibleClient()
+    private val chatStore by lazy { ChatStore(applicationContext) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!Settings.canDrawOverlays(this)) {
@@ -70,6 +74,7 @@ class OverlayService : Service() {
     private fun showPanel() {
         bubble?.let { windowManager.removeView(it) }
         bubble = null
+        loadActiveConversation()
         val params = overlayParams(
             width = 300.dp,
             height = WindowManager.LayoutParams.WRAP_CONTENT,
@@ -136,6 +141,7 @@ class OverlayService : Service() {
             return
         }
         overlayMessages += RemoteChatMessage("user", userText)
+        persistOverlayConversation()
         prompt.text.clear()
         response.text = "Thinking…"
         send.text = "Stop"
@@ -145,10 +151,33 @@ class OverlayService : Service() {
             onDelta = { delta -> response.text = if (response.text == "Thinking…") delta else response.text.toString() + delta },
             onComplete = {
                 overlayMessages += RemoteChatMessage("assistant", response.text.toString())
+                persistOverlayConversation()
                 activeRequest = null
                 send.text = "Send"
             },
-            onError = { error -> response.text = "Connection error: $error"; activeRequest = null; send.text = "Send" }
+            onError = { error -> response.text = "Connection error: $error"; persistOverlayConversation(); activeRequest = null; send.text = "Send" }
+        )
+    }
+
+    private fun loadActiveConversation() {
+        overlayMessages.clear()
+        overlayMessages += chatStore.loadMessages().map { RemoteChatMessage(it.role.lowercase(), it.text) }
+    }
+
+    private fun persistOverlayConversation() {
+        val stored = overlayMessages.mapIndexed { index, message ->
+            StoredChatMessage(System.currentTimeMillis() + index, message.role.uppercase(), message.content)
+        }
+        val conversationId = chatStore.activeConversationId() ?: System.currentTimeMillis()
+        chatStore.saveMessages(stored)
+        chatStore.setActiveConversationId(conversationId)
+        chatStore.saveConversation(
+            StoredConversation(
+                id = conversationId,
+                title = overlayMessages.firstOrNull { it.role == "user" }?.content?.replace('\n', ' ')?.take(56) ?: "New conversation",
+                updatedAt = System.currentTimeMillis(),
+                messages = stored
+            )
         )
     }
 
