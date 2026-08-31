@@ -78,6 +78,23 @@ class ChatStore(context: Context) {
         preferences.edit().putString(HISTORY_KEY, encoded.toString()).apply()
     }
 
+    fun deleteConversation(id: Long) {
+        val remaining = loadHistory().filterNot { it.id == id }
+        val encoded = JSONArray().apply {
+            remaining.forEach { saved ->
+                put(JSONObject().apply {
+                    put("id", saved.id)
+                    put("title", saved.title)
+                    put("updatedAt", saved.updatedAt)
+                    put("messages", JSONArray().apply {
+                        saved.messages.forEach { message -> put(JSONObject().put("id", message.id).put("role", message.role).put("text", message.text)) }
+                    })
+                })
+            }
+        }
+        preferences.edit().putString(HISTORY_KEY, encoded.toString()).apply()
+    }
+
     fun activeConversationId(): Long? = preferences.getLong(ACTIVE_ID_KEY, NO_CONVERSATION).takeIf { it != NO_CONVERSATION }
 
     fun setActiveConversationId(id: Long) {

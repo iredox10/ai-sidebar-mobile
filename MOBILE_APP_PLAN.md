@@ -72,7 +72,7 @@ Key modules/packages:
 - OpenAI-compatible streaming client with cancellation, errors and token usage.
 - First real provider path: OpenAI / OpenRouter / DeepSeek-compatible endpoints.
 
-The scaffold now persists a local multi-conversation history, including titles, timestamps, and opening older chats. Indexing, pins and usage records move to Room in the next persistence increment.
+The scaffold now persists a local multi-conversation history, including titles, timestamps, opening older chats, and deletion with confirmation. Indexing, pins and usage records move to Room in the next persistence increment.
 
 The initial OpenAI-compatible SSE client and its cancellable chat integration are now in progress. API keys are stored using a device-bound Android Keystore AES-GCM key, while provider, endpoint, and model are persisted separately as non-secret settings. Multi-profile support follows.
 

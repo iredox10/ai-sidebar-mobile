@@ -29,11 +29,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,6 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -157,6 +160,17 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         chatStore.setActiveConversationId(conversation.id)
         destination = Destination.CHAT
     }
+    val deleteConversation: (StoredConversation) -> Unit = { conversation ->
+        chatStore.deleteConversation(conversation.id)
+        if (conversation.id == activeConversationId) {
+            activeConversationId = System.currentTimeMillis()
+            messages.clear()
+            messages += ChatMessage(1, Role.ASSISTANT, "New conversation. How can I help?")
+            persistMessages()
+        } else {
+            conversationHistory = chatStore.loadHistory()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -192,7 +206,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     ) { padding ->
         when (destination) {
             Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
-            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, createNewConversation)
+            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, deleteConversation, createNewConversation)
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding), provider, {
                     provider = it
@@ -350,8 +364,10 @@ private fun ChatHistory(
     modifier: Modifier,
     conversations: List<StoredConversation>,
     onOpenConversation: (StoredConversation) -> Unit,
+    onDeleteConversation: (StoredConversation) -> Unit,
     onNewChat: () -> Unit
 ) {
+    var pendingDelete by remember { mutableStateOf<StoredConversation?>(null) }
     Column(modifier.fillMaxSize().padding(20.dp)) {
         Text("Your conversations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(18.dp))
@@ -364,9 +380,14 @@ private fun ChatHistory(
             LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(conversations, key = { it.id }) { conversation ->
                     Card(modifier = Modifier.fillMaxWidth().clickable { onOpenConversation(conversation) }) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(conversation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${conversation.messages.size} messages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(conversation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${conversation.messages.size} messages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { pendingDelete = conversation }) {
+                                Icon(Icons.Default.Delete, "Delete conversation")
+                            }
                         }
                     }
                 }
@@ -377,6 +398,17 @@ private fun ChatHistory(
             Spacer(Modifier.width(8.dp))
             Text("Start a new chat")
         }
+    }
+    pendingDelete?.let { conversation ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete conversation?") },
+            text = { Text("This removes “${conversation.title}” from this device.") },
+            confirmButton = {
+                TextButton(onClick = { onDeleteConversation(conversation); pendingDelete = null }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } }
+        )
     }
 }
 
