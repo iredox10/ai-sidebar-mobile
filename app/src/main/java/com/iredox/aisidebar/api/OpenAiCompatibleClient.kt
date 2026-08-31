@@ -17,7 +17,9 @@ data class ProviderConfig(
     val temperature: Double? = 0.7
 )
 
-data class RemoteChatMessage(val role: String, val content: String, val imageDataUrl: String? = null)
+data class RemoteChatMessage(val role: String, val content: String, val imageDataUrl: String? = null, val imageDataUrls: List<String>? = null) {
+    fun allImages(): List<String> = imageDataUrls ?: imageDataUrl?.let { listOf(it) } ?: emptyList()
+}
 
 /**
  * Small dependency-free SSE client for the OpenAI chat-completions protocol.
@@ -129,10 +131,14 @@ class OpenAiCompatibleClient {
     private fun mainThread(action: () -> Unit) = Handler(Looper.getMainLooper()).post(action)
 }
 
-private fun RemoteChatMessage.contentPayload(): Any = imageDataUrl?.let { dataUrl ->
-    JSONArray().put(JSONObject().put("type", "text").put("text", content))
-        .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", dataUrl)))
-} ?: content
+private fun RemoteChatMessage.contentPayload(): Any {
+    val imgs = allImages()
+    if (imgs.isEmpty()) return content
+    return JSONArray().apply {
+        put(JSONObject().put("type", "text").put("text", content))
+        imgs.forEach { dataUrl -> put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", dataUrl))) }
+    }
+}
 
 class StreamingRequest internal constructor() {
     @Volatile internal var connection: HttpURLConnection? = null

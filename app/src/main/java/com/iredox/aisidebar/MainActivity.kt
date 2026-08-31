@@ -355,7 +355,8 @@ private fun ChatScreen(
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     var screenContextNote by remember { mutableStateOf<String?>(null) }
-    var imageDataUrl by remember { mutableStateOf<String?>(null) }
+    var imageDataUrls by remember { mutableStateOf(listOf<String>()) }
+    var quotedText by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val openAiClient = remember { OpenAiCompatibleClient() }
     val anthropicClient = remember { AnthropicClient() }
@@ -366,16 +367,21 @@ private fun ChatScreen(
     val presetStore = remember { com.iredox.aisidebar.data.PresetStore(context.applicationContext) }
     var presets by remember { mutableStateOf(presetStore.load()) }
     LaunchedEffect(attachmentMenuOpen) { if (attachmentMenuOpen) presets = presetStore.load() }
+    fun isVisionModel(m: String): Boolean {
+        val vision = listOf("gpt-4o", "vision", "claude", "gemini", "gemma", "nemotron-nano-12b-vl", "omni")
+        return vision.any { m.lowercase().contains(it) }
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        if (imageDataUrls.size >= 3) { screenContextNote = "Up to 3 images per message."; return@rememberLauncherForActivityResult }
         runCatching {
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read image")
             require(bytes.size <= 5 * 1024 * 1024) { "Images must be 5 MB or smaller." }
             val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
             "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
         }.onSuccess {
-            imageDataUrl = it
-            screenContextNote = "Image attached. Choose a vision-capable model before sending."
+            imageDataUrls = imageDataUrls + it
+            screenContextNote = if (!isVisionModel(model)) "Image attached but \"${model}\" may not support vision — switch to GPT-4o, Claude or Gemini." else "Image attached (${imageDataUrls.size})."
         }.onFailure { error -> screenContextNote = error.message ?: "Could not attach that image." }
     }
     val textFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -392,10 +398,11 @@ private fun ChatScreen(
     }
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        if (imageDataUrls.size >= 3) { screenContextNote = "Up to 3 images per message."; return@rememberLauncherForActivityResult }
         runCatching { renderFirstPdfPage(context, uri) }
             .onSuccess {
-                imageDataUrl = it
-                screenContextNote = "First PDF page attached as an image. Choose a vision-capable model before sending."
+                imageDataUrls = imageDataUrls + it
+                screenContextNote = if (!isVisionModel(model)) "PDF page attached as image — use a vision model." else "PDF page attached (${imageDataUrls.size} images)."
             }
             .onFailure { error -> screenContextNote = error.message ?: "Could not attach that PDF." }
     }
@@ -496,8 +503,25 @@ private fun ChatScreen(
                 MessageCard(
                     message = message,
                     onRegenerate = if (message.role == Role.ASSISTANT && index == messages.lastIndex) ({ regenerate(index) }) else null,
-                    onEdit = if (message.role == Role.USER && index == messages.lastIndex - 1) ({ editLastPrompt(index) }) else null
+                    onEdit = if (message.role == Role.USER && index == messages.lastIndex - 1) ({ editLastPrompt(index) }) else null,
+                    onQuote = { quotedText = message.text.take(400) }
                 )
+            }
+        }
+        if (imageDataUrls.isNotEmpty()) {
+            Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${imageDataUrls.size} image(s) attached", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { imageDataUrls = emptyList(); screenContextNote = "Images removed." }) { Text("Clear") }
+                }
+            }
+        }
+        quotedText?.let { q ->
+            Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(q.take(120) + if (q.length > 120) "…" else "", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    IconButton(onClick = { quotedText = null }) { Icon(Icons.Default.Close, "Remove quote") }
+                }
             }
         }
         screenContextNote?.let {
@@ -583,15 +607,18 @@ private fun ChatScreen(
             FloatingActionButton(onClick = {
                 val cleanPrompt = prompt.trim()
                 if (activeRequest != null) {
-                    activeRequest?.cancel()
-                    activeRequest = null
-                    onMessagesChanged()
+                    activeRequest?.cancel(); activeRequest = null; onMessagesChanged()
                 } else if (cleanPrompt.isNotEmpty()) {
-                    messages += ChatMessage(System.nanoTime(), Role.USER, if (imageDataUrl == null) cleanPrompt else "[Image attached] $cleanPrompt")
+                    val quoted = quotedText?.let { "> ${it.replace("\n", " ")}\n\n" } ?: ""
+                    val combined = quoted + cleanPrompt
+                    val display = if (imageDataUrls.isNotEmpty()) "[${imageDataUrls.size} image(s)] $combined" else combined
+                    messages += ChatMessage(System.nanoTime(), Role.USER, display)
                     val responseId = System.nanoTime() + 1
                     messages += ChatMessage(responseId, Role.ASSISTANT, "")
                     onMessagesChanged()
-                    prompt = ""
+                    val toSend = combined
+                    val imgs = imageDataUrls.toList()
+                    prompt = ""; imageDataUrls = emptyList(); quotedText = null
                     if (apiKey.isBlank()) {
                         val messageIndex = messages.indexOfFirst { it.id == responseId }
                         messages[messageIndex] = messages[messageIndex].copy(text = "Add an API key for $provider under Settings to start streaming replies.")
@@ -600,8 +627,10 @@ private fun ChatScreen(
                         val outgoingMessages = messages.filter { it.id != responseId }
                             .map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) }
                             .toMutableList()
-                        if (imageDataUrl != null && outgoingMessages.isNotEmpty()) {
-                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = cleanPrompt, imageDataUrl = imageDataUrl)
+                        if (imgs.isNotEmpty() && outgoingMessages.isNotEmpty()) {
+                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = toSend, imageDataUrls = imgs)
+                        } else if (outgoingMessages.isNotEmpty()) {
+                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = toSend)
                         }
                         activeRequest = streamForProvider(
                             config = resolveConfig(),
@@ -614,11 +643,9 @@ private fun ChatScreen(
                             onError = { error ->
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
                                 if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = "Connection error: $error")
-                                activeRequest = null
-                                onMessagesChanged()
+                                activeRequest = null; onMessagesChanged()
                             }
                         )
-                        imageDataUrl = null
                     }
                 }
             }) { Icon(if (activeRequest == null) Icons.Default.Send else Icons.Default.Close, if (activeRequest == null) "Send" else "Stop response") }
@@ -630,7 +657,8 @@ private fun ChatScreen(
 private fun MessageCard(
     message: ChatMessage,
     onRegenerate: (() -> Unit)? = null,
-    onEdit: (() -> Unit)? = null
+    onEdit: (() -> Unit)? = null,
+    onQuote: (() -> Unit)? = null
 ) {
     val isUser = message.role == Role.USER
     val context = LocalContext.current
@@ -654,25 +682,23 @@ private fun MessageCard(
                     TextButton(onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("AI Sidebar response", message.text))
-                    }, contentPadding = PaddingValues(top = 6.dp)) {
-                        Text("Copy")
-                    }
+                    }, contentPadding = PaddingValues(top = 6.dp)) { Text("Copy") }
                     onRegenerate?.let { regenerate ->
-                        TextButton(onClick = regenerate, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
-                            Text("Regenerate")
-                        }
+                        TextButton(onClick = regenerate, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) { Text("Regenerate") }
                     }
                     TextButton(onClick = {
                         textToSpeech.language = Locale.getDefault()
                         textToSpeech.speak(message.text, TextToSpeech.QUEUE_FLUSH, null, "reply-${message.id}")
-                    }, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
-                        Text("Read aloud")
-                    }
+                    }, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) { Text("Read aloud") }
+                    onQuote?.let { q -> TextButton(onClick = q, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) { Text("Quote") } }
                 }
                 if (isUser) {
-                    onEdit?.let { edit ->
-                        TextButton(onClick = edit, contentPadding = PaddingValues(top = 6.dp)) { Text("Edit") }
+                    Row {
+                        onEdit?.let { edit -> TextButton(onClick = edit, contentPadding = PaddingValues(top = 6.dp)) { Text("Edit") } }
+                        onQuote?.let { q -> TextButton(onClick = q, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) { Text("Quote") } }
                     }
+                } else if (message.text.isNotBlank()) {
+                    onQuote?.let { q -> if (isUser.not() && message.id == 1L) TextButton(onClick = q, contentPadding = PaddingValues(top = 6.dp)) { Text("Quote") } }
                 }
             }
         }

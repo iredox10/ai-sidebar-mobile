@@ -102,15 +102,18 @@ class AnthropicClient {
 }
 
 private fun RemoteChatMessage.anthropicContent(): Any {
-    if (imageDataUrl != null) {
-        // image: extract mime and base64 from data URL
-        val comma = imageDataUrl.indexOf(',')
-        val header = if (comma > 0) imageDataUrl.substring(0, comma) else ""
-        val data = if (comma > 0) imageDataUrl.substring(comma + 1) else imageDataUrl
-        val mime = Regex("data:(.*?);").find(header)?.groupValues?.get(1) ?: "image/jpeg"
-        return JSONArray()
-            .put(JSONObject().put("type", "text").put("text", content))
-            .put(JSONObject().put("type", "image").put("source", JSONObject().put("type", "base64").put("media_type", mime).put("data", data)))
+    val imgs = allImages()
+    if (imgs.isNotEmpty()) {
+        return JSONArray().apply {
+            put(JSONObject().put("type", "text").put("text", content))
+            imgs.forEach { imageDataUrl ->
+                val comma = imageDataUrl.indexOf(',')
+                val header = if (comma > 0) imageDataUrl.substring(0, comma) else ""
+                val data = if (comma > 0) imageDataUrl.substring(comma + 1) else imageDataUrl
+                val mime = Regex("data:(.*?);").find(header)?.groupValues?.get(1) ?: "image/jpeg"
+                put(JSONObject().put("type", "image").put("source", JSONObject().put("type", "base64").put("media_type", mime).put("data", data)))
+            }
+        }
     }
     return content
 }
