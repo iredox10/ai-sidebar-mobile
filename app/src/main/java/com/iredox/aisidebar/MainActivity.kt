@@ -59,6 +59,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -66,6 +68,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -88,6 +91,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iredox.aisidebar.overlay.OverlayService
+import com.iredox.aisidebar.api.AnthropicClient
+import com.iredox.aisidebar.api.GoogleClient
 import com.iredox.aisidebar.api.OpenAiCompatibleClient
 import com.iredox.aisidebar.api.ProviderConfig
 import com.iredox.aisidebar.api.RemoteChatMessage
@@ -131,6 +136,16 @@ private enum class Destination(val label: String) { CHAT("Assistant"), HISTORY("
 private data class ChatMessage(val id: Long, val role: Role, val text: String)
 private enum class Role { USER, ASSISTANT }
 
+private fun keyForProvider(provider: String): String = when (provider.lowercase()) {
+    "openai" -> SecureKeyStore.KEY_OPENAI
+    "anthropic" -> SecureKeyStore.KEY_ANTHROPIC
+    "google" -> SecureKeyStore.KEY_GOOGLE
+    "deepseek" -> SecureKeyStore.KEY_DEEPSEEK
+    "openrouter" -> SecureKeyStore.KEY_OPENROUTER
+    "custom" -> SecureKeyStore.KEY_CUSTOM
+    else -> SecureKeyStore.KEY_OPENAI
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
@@ -141,9 +156,14 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     val savedProviderSettings = remember { providerSettingsStore.read() }
     var destination by remember { mutableStateOf(Destination.CHAT) }
     var provider by remember { mutableStateOf(savedProviderSettings.provider) }
-    var apiKey by remember { mutableStateOf(secureKeyStore.readApiKey().orEmpty()) }
+    var apiKey by remember { mutableStateOf(secureKeyStore.readKey(keyForProvider(savedProviderSettings.provider)).orEmpty()) }
     var endpoint by remember { mutableStateOf(savedProviderSettings.endpoint) }
     var model by remember { mutableStateOf(savedProviderSettings.model) }
+    var systemPrompt by remember { mutableStateOf(savedProviderSettings.systemPrompt) }
+    var temperature by remember { mutableStateOf(savedProviderSettings.temperature) }
+    var customBaseUrl by remember { mutableStateOf(savedProviderSettings.customBaseUrl) }
+    var customName by remember { mutableStateOf(savedProviderSettings.customName) }
+    var customModels by remember { mutableStateOf(savedProviderSettings.customModels) }
     var activeConversationId by remember { mutableStateOf(chatStore.activeConversationId() ?: System.currentTimeMillis()) }
     var conversationHistory by remember { mutableStateOf(chatStore.loadHistory()) }
     val messages = remember {
@@ -237,23 +257,60 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         }
     ) { padding ->
         when (destination) {
-            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
+            Destination.CHAT -> ChatScreen(
+                Modifier.padding(padding), messages, provider, apiKey, endpoint, model,
+                systemPrompt, temperature, customBaseUrl,
+                persistMessages, sharedText, onSharedTextConsumed
+            )
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, deleteConversation, renameConversation, createNewConversation)
             Destination.SETTINGS -> SettingsScreen(
-                Modifier.padding(padding), provider, {
+                Modifier.padding(padding),
+                provider, {
                     provider = it
-                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
-                }, apiKey, {
+                    apiKey = secureKeyStore.readKey(keyForProvider(it)).orEmpty()
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(provider = it))
+                },
+                apiKey, {
                     apiKey = it
-                    secureKeyStore.writeApiKey(it)
+                    secureKeyStore.writeKey(keyForProvider(provider), it)
                 },
                 endpoint, {
                     endpoint = it
-                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
-                }, model, {
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(endpoint = it))
+                },
+                model, {
                     model = it
-                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
-                }, chatStore
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(model = it))
+                },
+                systemPrompt, {
+                    systemPrompt = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(systemPrompt = it))
+                },
+                temperature, {
+                    temperature = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(temperature = it))
+                },
+                customBaseUrl, {
+                    customBaseUrl = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(customBaseUrl = it))
+                },
+                customName, {
+                    customName = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(customName = it))
+                },
+                customModels, {
+                    customModels = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(customModels = it))
+                },
+                chatStore
             )
         }
     }
@@ -275,6 +332,9 @@ private fun ChatScreen(
     apiKey: String,
     endpoint: String,
     model: String,
+    systemPrompt: String,
+    temperature: Float,
+    customBaseUrl: String,
     onMessagesChanged: () -> Unit,
     sharedText: String?,
     onSharedTextConsumed: () -> Unit
@@ -283,9 +343,12 @@ private fun ChatScreen(
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     var screenContextNote by remember { mutableStateOf<String?>(null) }
     var imageDataUrl by remember { mutableStateOf<String?>(null) }
-    val client = remember { OpenAiCompatibleClient() }
+    val openAiClient = remember { OpenAiCompatibleClient() }
+    val anthropicClient = remember { AnthropicClient() }
+    val googleClient = remember { GoogleClient() }
     val webSearchClient = remember { WebSearchClient() }
     val context = LocalContext.current
+    var attachmentMenuOpen by remember { mutableStateOf(false) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -342,15 +405,44 @@ private fun ChatScreen(
             onSharedTextConsumed()
         }
     }
+    fun resolveConfig(): ProviderConfig {
+        val resolvedEndpoint = when (provider.lowercase()) {
+            "openai" -> "https://api.openai.com/v1/chat/completions"
+            "deepseek" -> "https://api.deepseek.com/chat/completions"
+            "openrouter" -> "https://openrouter.ai/api/v1/chat/completions"
+            "custom" -> if (customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
+            else -> endpoint
+        }
+        return ProviderConfig(
+            endpoint = resolvedEndpoint,
+            apiKey = apiKey,
+            model = model,
+            systemPrompt = systemPrompt,
+            temperature = temperature.toDouble()
+        )
+    }
+    fun streamForProvider(
+        config: ProviderConfig,
+        msgs: List<RemoteChatMessage>,
+        onDelta: (String) -> Unit,
+        onComplete: () -> Unit,
+        onError: (String) -> Unit
+    ): StreamingRequest {
+        return when (provider.lowercase()) {
+            "anthropic" -> anthropicClient.streamChat(config, msgs, onDelta, onComplete, onError)
+            "google" -> googleClient.streamChat(config, msgs, onDelta, onComplete, onError)
+            else -> openAiClient.streamChat(config, msgs, onDelta, onComplete, onError)
+        }
+    }
     fun regenerate(responseIndex: Int) {
-        if (activeRequest != null || provider != "OpenAI-compatible" || apiKey.isBlank()) return
+        if (activeRequest != null || apiKey.isBlank()) return
         val response = messages.getOrNull(responseIndex) ?: return
         if (response.role != Role.ASSISTANT) return
         messages[responseIndex] = response.copy(text = "")
         onMessagesChanged()
-        activeRequest = client.streamChat(
-            config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
-            messages = messages.take(responseIndex).map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
+        activeRequest = streamForProvider(
+            config = resolveConfig(),
+            msgs = messages.take(responseIndex).map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
             onDelta = { delta ->
                 messages[responseIndex] = messages[responseIndex].copy(text = messages[responseIndex].text + delta)
             },
@@ -400,68 +492,59 @@ private fun ChatScreen(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            IconButton(onClick = {
-                if (!ScreenReadAccessibilityService.isEnabled()) {
-                    screenContextNote = "Enable Accessibility to attach visible screen text."
-                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                } else {
-                    val capture = ScreenReadAccessibilityService.captureActiveScreen()
-                    if (capture?.visibleText.isNullOrBlank()) {
-                        screenContextNote = "No safe visible text was available on this screen."
-                    } else {
-                        val contextBlock = "[Visible screen context from ${capture?.packageName ?: "current app"}]\n${capture?.visibleText}"
-                        prompt = listOf(prompt.trim(), contextBlock).filter { it.isNotBlank() }.joinToString("\n\n")
-                        screenContextNote = "Visible screen context added. Review it before sending."
-                    }
-                }
-            }) { Icon(Icons.Default.Visibility, "Attach visible screen context") }
-            IconButton(onClick = { imagePicker.launch("image/*") }) {
-                Icon(Icons.Default.Image, "Attach image")
-            }
-            IconButton(onClick = { textFilePicker.launch("text/plain") }) {
-                Icon(Icons.Default.AttachFile, "Attach text file")
-            }
-            IconButton(onClick = { pdfPicker.launch("application/pdf") }) {
-                Icon(Icons.Default.ContentCopy, "Attach first PDF page")
-            }
-            IconButton(onClick = {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    startVoiceInput()
-                } else {
-                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            }) { Icon(Icons.Default.Mic, "Speak prompt") }
-            IconButton(onClick = {
-                val query = prompt.trim()
-                if (query.isBlank()) {
-                    screenContextNote = "Write a search query first."
-                } else {
-                    screenContextNote = "Searching the web…"
-                    webSearchClient.search(
-                        query = query,
-                        onSuccess = { results ->
-                            if (results.isEmpty()) {
-                                screenContextNote = "No web results were found."
-                            } else {
-                                val contextBlock = buildString {
-                                    append("[Web search results for: $query]\n")
-                                    results.forEachIndexed { index, result ->
-                                        append("${index + 1}. ${result.title}\n${result.snippet}\n${result.url}\n")
-                                    }
-                                }.trim()
-                                prompt = "$query\n\n$contextBlock"
-                                screenContextNote = "Web results added to the draft. Review before sending."
+            Box {
+                IconButton(onClick = { attachmentMenuOpen = true }) { Icon(Icons.Default.Add, "Add context or attachment") }
+                DropdownMenu(expanded = attachmentMenuOpen, onDismissRequest = { attachmentMenuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Add visible screen text") }, leadingIcon = { Icon(Icons.Default.Visibility, null) }, onClick = {
+                        attachmentMenuOpen = false
+                        if (!ScreenReadAccessibilityService.isEnabled()) {
+                            screenContextNote = "Enable Accessibility to attach visible screen text."
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        } else {
+                            val capture = ScreenReadAccessibilityService.captureActiveScreen()
+                            if (capture?.visibleText.isNullOrBlank()) screenContextNote = "No safe visible text was available on this screen."
+                            else {
+                                val contextBlock = "[Visible screen context from ${capture?.packageName ?: "current app"}]\n${capture?.visibleText}"
+                                prompt = listOf(prompt.trim(), contextBlock).filter { it.isNotBlank() }.joinToString("\n\n")
+                                screenContextNote = "Visible screen context added. Review it before sending."
                             }
-                        },
-                        onError = { error -> screenContextNote = "Web search error: $error" }
-                    )
+                        }
+                    })
+                    DropdownMenuItem(text = { Text("Attach image") }, leadingIcon = { Icon(Icons.Default.Image, null) }, onClick = { attachmentMenuOpen = false; imagePicker.launch("image/*") })
+                    DropdownMenuItem(text = { Text("Attach text file") }, leadingIcon = { Icon(Icons.Default.AttachFile, null) }, onClick = { attachmentMenuOpen = false; textFilePicker.launch("text/plain") })
+                    DropdownMenuItem(text = { Text("Attach first PDF page") }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = { attachmentMenuOpen = false; pdfPicker.launch("application/pdf") })
+                    DropdownMenuItem(text = { Text("Speak prompt") }, leadingIcon = { Icon(Icons.Default.Mic, null) }, onClick = {
+                        attachmentMenuOpen = false
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceInput()
+                        else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                    })
+                    DropdownMenuItem(text = { Text("Search the web") }, leadingIcon = { Icon(Icons.Default.Search, null) }, onClick = {
+                        attachmentMenuOpen = false
+                        val query = prompt.trim()
+                        if (query.isBlank()) screenContextNote = "Write a search query first."
+                        else {
+                            screenContextNote = "Searching the web…"
+                            webSearchClient.search(query, { results ->
+                                if (results.isEmpty()) screenContextNote = "No web results were found."
+                                else {
+                                    val contextBlock = buildString {
+                                        append("[Web search results for: $query]\n")
+                                        results.forEachIndexed { index, result -> append("${index + 1}. ${result.title}\n${result.snippet}\n${result.url}\n") }
+                                    }.trim()
+                                    prompt = "$query\n\n$contextBlock"
+                                    screenContextNote = "Web results added to the draft. Review before sending."
+                                }
+                            }, { error -> screenContextNote = "Web search error: $error" })
+                        }
+                    })
                 }
-            }) { Icon(Icons.Default.Search, "Search the web and attach results") }
+            }
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Ask anything…") },
+                minLines = 2,
                 maxLines = 4,
                 shape = RoundedCornerShape(22.dp)
             )
@@ -478,9 +561,9 @@ private fun ChatScreen(
                     messages += ChatMessage(responseId, Role.ASSISTANT, "")
                     onMessagesChanged()
                     prompt = ""
-                    if (provider != "OpenAI-compatible" || apiKey.isBlank()) {
+                    if (apiKey.isBlank()) {
                         val messageIndex = messages.indexOfFirst { it.id == responseId }
-                        messages[messageIndex] = messages[messageIndex].copy(text = if (apiKey.isBlank()) "Add an API key under Settings to start streaming replies." else "$provider streaming will be added after the OpenAI-compatible path.")
+                        messages[messageIndex] = messages[messageIndex].copy(text = "Add an API key for $provider under Settings to start streaming replies.")
                         onMessagesChanged()
                     } else {
                         val outgoingMessages = messages.filter { it.id != responseId }
@@ -489,9 +572,9 @@ private fun ChatScreen(
                         if (imageDataUrl != null && outgoingMessages.isNotEmpty()) {
                             outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = cleanPrompt, imageDataUrl = imageDataUrl)
                         }
-                        activeRequest = client.streamChat(
-                            config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
-                            messages = outgoingMessages,
+                        activeRequest = streamForProvider(
+                            config = resolveConfig(),
+                            msgs = outgoingMessages,
                             onDelta = { delta ->
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
                                 if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
@@ -536,7 +619,7 @@ private fun MessageCard(
                 } else {
                     MarkdownMessageText(message.text, MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (!isUser && message.text.isNotBlank()) {
+                if (!isUser && message.id != 1L && message.text.isNotBlank()) {
                     TextButton(onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("AI Sidebar response", message.text))
@@ -708,10 +791,24 @@ private fun SettingsScreen(
     onEndpointChange: (String) -> Unit,
     model: String,
     onModelChange: (String) -> Unit,
+    systemPrompt: String,
+    onSystemPromptChange: (String) -> Unit,
+    temperature: Float,
+    onTemperatureChange: (Float) -> Unit,
+    customBaseUrl: String,
+    onCustomBaseUrlChange: (String) -> Unit,
+    customName: String,
+    onCustomNameChange: (String) -> Unit,
+    customModels: String,
+    onCustomModelsChange: (String) -> Unit,
     chatStore: ChatStore
 ) {
     val context = LocalContext.current
+    val providerClient = remember { OpenAiCompatibleClient() }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+    var modelMenuOpen by remember { mutableStateOf(false) }
+    var modelStatus by remember { mutableStateOf<String?>(null) }
+    var availableModels by remember(provider) { mutableStateOf(defaultModelsFor(provider)) }
     val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -741,12 +838,19 @@ private fun SettingsScreen(
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             Text("Provider", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Streaming integration is the next implementation milestone.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Choose a provider — keys are stored encrypted on device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("OpenAI-compatible", "Anthropic", "Google").forEach { name ->
-                    AssistChip(onClick = { onProviderChange(name) }, label = { Text(name) }, leadingIcon = if (provider == name) ({ Text("✓") }) else null)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("openai" to "OpenAI", "anthropic" to "Anthropic", "google" to "Google").forEach { (id, label) ->
+                        AssistChip(onClick = { onProviderChange(id) }, label = { Text(label) }, leadingIcon = if (provider.lowercase() == id) ({ Text("✓") }) else null)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("deepseek" to "DeepSeek", "openrouter" to "OpenRouter", "custom" to "Custom").forEach { (id, label) ->
+                        AssistChip(onClick = { onProviderChange(id) }, label = { Text(label) }, leadingIcon = if (provider.lowercase() == id) ({ Text("✓") }) else null)
+                    }
                 }
             }
         }
@@ -755,30 +859,107 @@ private fun SettingsScreen(
                 value = apiKey,
                 onValueChange = onApiKeyChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("API key") },
-                placeholder = { Text("Encrypted on this device") },
+                label = { Text("${provider.lowercase().replaceFirstChar { it.uppercase() }} API key") },
+                placeholder = { Text(if (provider == "custom") "Optional for local servers" else "Encrypted on this device") },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true
             )
         }
-        item {
-            OutlinedTextField(
-                value = endpoint,
-                onValueChange = onEndpointChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Chat completions endpoint") },
-                supportingText = { Text("OpenRouter, DeepSeek, and compatible private servers work here.") },
-                singleLine = true
-            )
+        if (provider.lowercase() == "custom") {
+            item {
+                OutlinedTextField(
+                    value = customName,
+                    onValueChange = onCustomNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Display Name") },
+                    placeholder = { Text("e.g. Ollama, LM Studio") },
+                    singleLine = true
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = customBaseUrl,
+                    onValueChange = onCustomBaseUrlChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Base URL (ends with /v1)") },
+                    placeholder = { Text("https://api.example.com/v1") },
+                    singleLine = true
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = customModels,
+                    onValueChange = onCustomModelsChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Models (comma-separated)") },
+                    placeholder = { Text("llama3.3:70b, qwen2.5-coder:32b") },
+                    singleLine = true
+                )
+            }
+        } else if (provider.lowercase() == "openai" || provider.lowercase() == "openrouter") {
+            item {
+                OutlinedTextField(
+                    value = endpoint,
+                    onValueChange = onEndpointChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Chat completions endpoint") },
+                    supportingText = { Text("Override only if using a proxy. Leave default for official API.") },
+                    singleLine = true
+                )
+            }
         }
         item {
             OutlinedTextField(
-                value = model,
-                onValueChange = onModelChange,
+                value = systemPrompt,
+                onValueChange = onSystemPromptChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Model") },
-                singleLine = true
+                label = { Text("System Prompt") },
+                placeholder = { Text("You are a helpful assistant...") },
+                minLines = 2,
+                maxLines = 4
             )
+        }
+        item {
+            Column {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Temperature", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(String.format(Locale.US, "%.1f", temperature), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                }
+                Slider(value = temperature, onValueChange = onTemperatureChange, valueRange = 0f..2f, steps = 19)
+            }
+        }
+        item {
+            Text("Model", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Box {
+                Button(onClick = { modelMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
+                    availableModels.take(30).forEach { modelId ->
+                        DropdownMenuItem(text = { Text(modelId) }, onClick = { onModelChange(modelId); modelMenuOpen = false })
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    if (apiKey.isBlank()) modelStatus = "Add an API key first."
+                    else {
+                        val cfgEndpoint = if (provider.lowercase() == "custom" && customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
+                        modelStatus = "Loading models from your endpoint…"
+                        providerClient.listModels(
+                            ProviderConfig(endpoint = cfgEndpoint, apiKey = apiKey, model = model),
+                            onSuccess = { loaded ->
+                                availableModels = loaded.ifEmpty { defaultModelsFor(provider) }
+                                modelStatus = if (loaded.isEmpty()) "No models returned; showing defaults." else "Loaded ${loaded.size} models."
+                                modelMenuOpen = loaded.isNotEmpty()
+                            },
+                            onError = { error -> modelStatus = "Could not load models: $error" }
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Load models from endpoint") }
+            modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         item { Text("Overlay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         item {
@@ -839,4 +1020,13 @@ private fun SettingsScreen(
             }
         }
     }
+}
+
+private fun defaultModelsFor(provider: String): List<String> = when (provider.lowercase()) {
+    "anthropic" -> listOf("claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-opus-4-20250514")
+    "google" -> listOf("gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-flash-lite")
+    "deepseek" -> listOf("deepseek-v4-flash", "deepseek-v4-pro")
+    "openrouter" -> listOf("openrouter/free", "openai/gpt-oss-20b:free", "google/gemma-4-31b-it:free", "nvidia/nemotron-3-nano-30b-a3b:free")
+    "custom" -> listOf("llama3.3:70b", "qwen2.5-coder:32b")
+    else -> listOf("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini")
 }
