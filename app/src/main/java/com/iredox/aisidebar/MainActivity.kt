@@ -66,6 +66,8 @@ import com.iredox.aisidebar.api.ProviderConfig
 import com.iredox.aisidebar.api.RemoteChatMessage
 import com.iredox.aisidebar.api.StreamingRequest
 import com.iredox.aisidebar.data.SecureKeyStore
+import com.iredox.aisidebar.data.ChatStore
+import com.iredox.aisidebar.data.StoredChatMessage
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
@@ -86,15 +88,21 @@ private enum class Role { USER, ASSISTANT }
 private fun SidebarApp() {
     val context = LocalContext.current
     val secureKeyStore = remember { SecureKeyStore(context.applicationContext) }
+    val chatStore = remember { ChatStore(context.applicationContext) }
     var destination by remember { mutableStateOf(Destination.CHAT) }
     var provider by remember { mutableStateOf("OpenAI-compatible") }
     var apiKey by remember { mutableStateOf(secureKeyStore.readApiKey().orEmpty()) }
     var endpoint by remember { mutableStateOf("https://api.openai.com/v1/chat/completions") }
     var model by remember { mutableStateOf("gpt-4o-mini") }
     val messages = remember {
-        mutableStateListOf(
-            ChatMessage(1, Role.ASSISTANT, "Hi — I’m AI Sidebar. Add your provider key in Settings, then I’ll be ready to help with text and (later) screen context.")
-        )
+        val restored = chatStore.loadMessages().map { ChatMessage(it.id, Role.valueOf(it.role), it.text) }
+        mutableStateListOf<ChatMessage>().apply {
+            if (restored.isEmpty()) add(ChatMessage(1, Role.ASSISTANT, "Hi — I’m AI Sidebar. Add your provider key in Settings, then I’ll be ready to help with text and (later) screen context."))
+            else addAll(restored)
+        }
+    }
+    val persistMessages = {
+        chatStore.saveMessages(messages.map { StoredChatMessage(it.id, it.role.name, it.text) })
     }
 
     Scaffold(
@@ -130,7 +138,7 @@ private fun SidebarApp() {
         }
     ) { padding ->
         when (destination) {
-            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model)
+            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding), provider, { provider = it }, apiKey, {
@@ -158,7 +166,8 @@ private fun ChatScreen(
     provider: String,
     apiKey: String,
     endpoint: String,
-    model: String
+    model: String,
+    onMessagesChanged: () -> Unit
 ) {
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
@@ -193,14 +202,17 @@ private fun ChatScreen(
                 if (activeRequest != null) {
                     activeRequest?.cancel()
                     activeRequest = null
+                    onMessagesChanged()
                 } else if (cleanPrompt.isNotEmpty()) {
                     messages += ChatMessage(System.nanoTime(), Role.USER, cleanPrompt)
                     val responseId = System.nanoTime() + 1
                     messages += ChatMessage(responseId, Role.ASSISTANT, "")
+                    onMessagesChanged()
                     prompt = ""
                     if (provider != "OpenAI-compatible" || apiKey.isBlank()) {
                         val messageIndex = messages.indexOfFirst { it.id == responseId }
                         messages[messageIndex] = messages[messageIndex].copy(text = if (apiKey.isBlank()) "Add an API key under Settings to start streaming replies." else "$provider streaming will be added after the OpenAI-compatible path.")
+                        onMessagesChanged()
                     } else {
                         activeRequest = client.streamChat(
                             config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
@@ -209,11 +221,12 @@ private fun ChatScreen(
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
                                 if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
                             },
-                            onComplete = { activeRequest = null },
+                            onComplete = { activeRequest = null; onMessagesChanged() },
                             onError = { error ->
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
                                 if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = "Connection error: $error")
                                 activeRequest = null
+                                onMessagesChanged()
                             }
                         )
                     }
