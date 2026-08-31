@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">AI Sidebar</string>
+    <string name="overlay_channel_name">AI Sidebar overlay</string>
+    <string name="overlay_channel_description">Keeps the AI Sidebar bubble available over other apps.</string>
+    <string name="overlay_notification_title">AI Sidebar is ready</string>
+    <string name="overlay_notification_body">Tap to return to AI Sidebar.</string>
+    <string name="accessibility_service_description">Allows AI Sidebar to read visible screen text only when you explicitly attach screen context.</string>
+</resources>
