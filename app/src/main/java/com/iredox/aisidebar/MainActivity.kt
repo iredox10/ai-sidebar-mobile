@@ -2,6 +2,8 @@ package com.iredox.aisidebar
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -84,6 +86,7 @@ import com.iredox.aisidebar.data.ProviderSettings
 import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
+import java.io.ByteArrayOutputStream
 
 class MainActivity : ComponentActivity() {
     private var sharedText by mutableStateOf<String?>(null)
@@ -287,6 +290,15 @@ private fun ChatScreen(
             screenContextNote = "Text file added to the draft. Review it before sending."
         }.onFailure { error -> screenContextNote = error.message ?: "Could not attach that file." }
     }
+    val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching { renderFirstPdfPage(context, uri) }
+            .onSuccess {
+                imageDataUrl = it
+                screenContextNote = "First PDF page attached as an image. Choose a vision-capable model before sending."
+            }
+            .onFailure { error -> screenContextNote = error.message ?: "Could not attach that PDF." }
+    }
     LaunchedEffect(sharedText) {
         sharedText?.let {
             prompt = it
@@ -337,6 +349,9 @@ private fun ChatScreen(
             }
             IconButton(onClick = { textFilePicker.launch("text/plain") }) {
                 Icon(Icons.Default.AttachFile, "Attach text file")
+            }
+            IconButton(onClick = { pdfPicker.launch("application/pdf") }) {
+                Icon(Icons.Default.ContentCopy, "Attach first PDF page")
             }
             OutlinedTextField(
                 value = prompt,
@@ -403,6 +418,31 @@ private fun MessageCard(message: ChatMessage) {
             shape = RoundedCornerShape(18.dp)
         ) {
             Text(message.text, modifier = Modifier.padding(14.dp), color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun renderFirstPdfPage(context: Context, uri: Uri): String {
+    val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: error("Could not open PDF")
+    descriptor.use { file ->
+        PdfRenderer(file).use { renderer ->
+            require(renderer.pageCount > 0) { "The PDF has no pages." }
+            renderer.openPage(0).use { page ->
+                val scale = minOf(1f, 1440f / maxOf(page.width, page.height).toFloat())
+                val bitmap = Bitmap.createBitmap(
+                    (page.width * scale).toInt().coerceAtLeast(1),
+                    (page.height * scale).toInt().coerceAtLeast(1),
+                    Bitmap.Config.ARGB_8888
+                )
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val encoded = ByteArrayOutputStream().use { output ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output)
+                    output.toByteArray()
+                }
+                bitmap.recycle()
+                require(encoded.size <= 5 * 1024 * 1024) { "The rendered PDF page is too large." }
+                return "data:image/jpeg;base64,${Base64.encodeToString(encoded, Base64.NO_WRAP)}"
+            }
         }
     }
 }
