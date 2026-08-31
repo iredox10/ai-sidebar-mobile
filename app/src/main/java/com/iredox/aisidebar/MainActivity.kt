@@ -214,6 +214,9 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                     ) { Text("AI", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
                 },
                 actions = {
+                    IconButton(onClick = createNewConversation) {
+                        Icon(Icons.Default.Add, contentDescription = "Start new chat")
+                    }
                     IconButton(onClick = { destination = Destination.SETTINGS }) {
                         Icon(Icons.Default.Settings, contentDescription = "Open settings")
                     }
