@@ -328,6 +328,14 @@ private fun ChatScreen(
             }
         )
     }
+    fun editLastPrompt(userIndex: Int) {
+        if (activeRequest != null || userIndex != messages.lastIndex - 1) return
+        val userMessage = messages.getOrNull(userIndex)?.takeIf { it.role == Role.USER } ?: return
+        prompt = userMessage.text.removePrefix("[Image attached] ")
+        messages.removeAt(messages.lastIndex)
+        messages.removeAt(userIndex)
+        onMessagesChanged()
+    }
     Column(modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -341,7 +349,8 @@ private fun ChatScreen(
             itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
                 MessageCard(
                     message = message,
-                    onRegenerate = if (message.role == Role.ASSISTANT && index == messages.lastIndex) ({ regenerate(index) }) else null
+                    onRegenerate = if (message.role == Role.ASSISTANT && index == messages.lastIndex) ({ regenerate(index) }) else null,
+                    onEdit = if (message.role == Role.USER && index == messages.lastIndex - 1) ({ editLastPrompt(index) }) else null
                 )
             }
         }
@@ -437,7 +446,11 @@ private fun ChatScreen(
 }
 
 @Composable
-private fun MessageCard(message: ChatMessage, onRegenerate: (() -> Unit)? = null) {
+private fun MessageCard(
+    message: ChatMessage,
+    onRegenerate: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null
+) {
     val isUser = message.role == Role.USER
     val context = LocalContext.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -459,6 +472,11 @@ private fun MessageCard(message: ChatMessage, onRegenerate: (() -> Unit)? = null
                         TextButton(onClick = regenerate, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
                             Text("Regenerate")
                         }
+                    }
+                }
+                if (isUser) {
+                    onEdit?.let { edit ->
+                        TextButton(onClick = edit, contentPadding = PaddingValues(top = 6.dp)) { Text("Edit") }
                     }
                 }
             }
