@@ -90,6 +90,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.iredox.aisidebar.overlay.OverlayService
 import com.iredox.aisidebar.api.AnthropicClient
@@ -309,8 +310,12 @@ private fun SidebarApp(sharedText: String?, sharedImageUri: Uri?, onSharedTextCo
                 provider, {
                     provider = it
                     apiKey = secureKeyStore.readKey(keyForProvider(it)).orEmpty()
+                    val newModels = defaultModelsFor(it)
+                    if (model !in newModels && newModels.isNotEmpty()) {
+                        model = newModels[0]
+                    }
                     val current = providerSettingsStore.read()
-                    providerSettingsStore.write(current.copy(provider = it))
+                    providerSettingsStore.write(current.copy(provider = it, model = model))
                 },
                 apiKey, {
                     apiKey = it
@@ -1184,9 +1189,12 @@ private fun SettingsScreen(
     val context = LocalContext.current
     val providerClient = remember { OpenAiCompatibleClient() }
     var exportStatus by remember { mutableStateOf<String?>(null) }
+    var providerMenuOpen by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
     var availableModels by remember(provider) { mutableStateOf(defaultModelsFor(provider)) }
+    var showKeys by remember { mutableStateOf(setOf<String>()) }
+    var showAdvanced by remember { mutableStateOf(false) }
     val profileStore = remember { com.iredox.aisidebar.data.ProfileStore(context.applicationContext) }
     var profilesState by remember { mutableStateOf(profileStore.load()) }
     var profileMenuOpen by remember { mutableStateOf(false) }
@@ -1311,86 +1319,114 @@ private fun SettingsScreen(
             }
         }
         item {
-            Text("Provider", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Choose a provider — keys are stored encrypted on device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Models & Providers", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("openai" to "OpenAI", "anthropic" to "Anthropic", "google" to "Google").forEach { (id, label) ->
-                        AssistChip(onClick = { onProviderChange(id) }, label = { Text(label) }, leadingIcon = if (provider.lowercase() == id) ({ Text("✓") }) else null)
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Default Provider", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box {
+                                Button(onClick = { providerMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(provider.lowercase().replaceFirstChar { it.uppercase() }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                DropdownMenu(expanded = providerMenuOpen, onDismissRequest = { providerMenuOpen = false }) {
+                                    listOf("openai" to "OpenAI", "anthropic" to "Anthropic", "google" to "Google", "deepseek" to "DeepSeek", "openrouter" to "OpenRouter", "custom" to "Custom").forEach { (id, label) ->
+                                        DropdownMenuItem(text = { Text(label) }, onClick = { providerMenuOpen = false; onProviderChange(id) })
+                                    }
+                                }
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text("Default Model", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box {
+                                Button(onClick = { modelMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
+                                    availableModels.take(30).forEach { m -> DropdownMenuItem(text = { Text(m) }, onClick = { modelMenuOpen = false; onModelChange(m) }) }
+                                }
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            if (apiKey.isBlank()) modelStatus = "Add the ${provider} key first."
+                            else {
+                                val cfgEndpoint = if (provider.lowercase() == "custom" && customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
+                                modelStatus = "Loading models..."
+                                providerClient.listModels(ProviderConfig(endpoint = cfgEndpoint, apiKey = apiKey, model = model),
+                                    onSuccess = { loaded -> availableModels = loaded.ifEmpty { defaultModelsFor(provider) }; modelStatus = if (loaded.isEmpty()) "No models, showing defaults." else "Loaded ${loaded.size} models."; modelMenuOpen = loaded.isNotEmpty() },
+                                    onError = { e -> modelStatus = "Failed: $e" })
+                            }
+                        }, modifier = Modifier.fillMaxWidth()
+                    ) { Text("Load models from endpoint") }
+                    modelStatus?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+        }
+        item { Text("API Keys", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text("Stored encrypted on device. Web-style: one card per provider.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            val ks = remember { com.iredox.aisidebar.data.SecureKeyStore(context.applicationContext) }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                @Composable
+                fun KeyCard(label: String, keyId: String, placeholder: String) {
+                    var shown by remember { mutableStateOf(showKeys.contains(keyId)) }
+                    var value by remember { mutableStateOf(ks.readKey(keyId).orEmpty()) }
+                    var status by remember { mutableStateOf(if (value.isNotBlank()) "Saved" else "Not saved") }
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
+                            OutlinedTextField(
+                                value = value, onValueChange = {
+                                    value = it; ks.writeKey(keyId, it); status = if (it.isNotBlank()) "Saved" else "Not saved"
+                                    if (provider.lowercase() == keyId.replace("Key","").lowercase() || (keyId == com.iredox.aisidebar.data.SecureKeyStore.KEY_OPENAI && provider.lowercase()=="openai") || (keyId == com.iredox.aisidebar.data.SecureKeyStore.KEY_OPENROUTER && provider.lowercase()=="openrouter")) {
+                                        onApiKeyChange(it)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(), label = { Text("$label Key") }, placeholder = { Text(placeholder) },
+                                visualTransformation = if (shown) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                                singleLine = true, trailingIcon = { TextButton(onClick = { shown = !shown; showKeys = if (shown) showKeys - keyId else showKeys + keyId }) { Text(if (shown) "Hide" else "Show") } }
+                            )
+                            Text(status, style = MaterialTheme.typography.labelSmall, color = if (status=="Saved") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("deepseek" to "DeepSeek", "openrouter" to "OpenRouter", "custom" to "Custom").forEach { (id, label) ->
-                        AssistChip(onClick = { onProviderChange(id) }, label = { Text(label) }, leadingIcon = if (provider.lowercase() == id) ({ Text("✓") }) else null)
+                KeyCard("OpenAI", com.iredox.aisidebar.data.SecureKeyStore.KEY_OPENAI, "sk-...")
+                KeyCard("Anthropic", com.iredox.aisidebar.data.SecureKeyStore.KEY_ANTHROPIC, "sk-ant-...")
+                KeyCard("Google", com.iredox.aisidebar.data.SecureKeyStore.KEY_GOOGLE, "AIza...")
+                KeyCard("DeepSeek", com.iredox.aisidebar.data.SecureKeyStore.KEY_DEEPSEEK, "sk-...")
+                KeyCard("OpenRouter", com.iredox.aisidebar.data.SecureKeyStore.KEY_OPENROUTER, "sk-or-...")
+                // Custom card with extra fields
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Custom (OpenAI-compatible)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
+                        var shown by remember { mutableStateOf(showKeys.contains("customKey")) }
+                        var cKey by remember { mutableStateOf(ks.readKey(com.iredox.aisidebar.data.SecureKeyStore.KEY_CUSTOM).orEmpty()) }
+                        OutlinedTextField(value = cKey, onValueChange = { cKey = it; ks.writeKey(com.iredox.aisidebar.data.SecureKeyStore.KEY_CUSTOM, it); if (provider.lowercase()=="custom") onApiKeyChange(it) },
+                            modifier = Modifier.fillMaxWidth(), label = { Text("Custom Key (optional)") }, placeholder = { Text("sk-...") },
+                            visualTransformation = if (shown) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true, trailingIcon = { TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") } }
+                        )
+                        OutlinedTextField(value = customName, onValueChange = onCustomNameChange, modifier = Modifier.fillMaxWidth(), label = { Text("Display Name") }, placeholder = { Text("e.g. Ollama") }, singleLine = true)
+                        OutlinedTextField(value = customBaseUrl, onValueChange = onCustomBaseUrlChange, modifier = Modifier.fillMaxWidth(), label = { Text("Base URL (ends with /v1)") }, placeholder = { Text("https://api.example.com/v1") }, singleLine = true)
+                        OutlinedTextField(value = customModels, onValueChange = onCustomModelsChange, modifier = Modifier.fillMaxWidth(), label = { Text("Models (comma-separated)") }, placeholder = { Text("llama3, qwen2.5") }, singleLine = true)
                     }
                 }
-            }
-        }
-        item {
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("${provider.lowercase().replaceFirstChar { it.uppercase() }} API key") },
-                placeholder = { Text(if (provider == "custom") "Optional for local servers" else "Encrypted on this device") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = tavilyKey,
-                onValueChange = onTavilyKeyChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Tavily API key (web search)") },
-                placeholder = { Text("tvly-...  (optional, falls back to DuckDuckGo)") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true
-            )
-        }
-        if (provider.lowercase() == "custom") {
-            item {
-                OutlinedTextField(
-                    value = customName,
-                    onValueChange = onCustomNameChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Display Name") },
-                    placeholder = { Text("e.g. Ollama, LM Studio") },
-                    singleLine = true
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = customBaseUrl,
-                    onValueChange = onCustomBaseUrlChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Base URL (ends with /v1)") },
-                    placeholder = { Text("https://api.example.com/v1") },
-                    singleLine = true
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = customModels,
-                    onValueChange = onCustomModelsChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Models (comma-separated)") },
-                    placeholder = { Text("llama3.3:70b, qwen2.5-coder:32b") },
-                    singleLine = true
-                )
-            }
-        } else if (provider.lowercase() == "openai" || provider.lowercase() == "openrouter") {
-            item {
-                OutlinedTextField(
-                    value = endpoint,
-                    onValueChange = onEndpointChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Chat completions endpoint") },
-                    supportingText = { Text("Override only if using a proxy. Leave default for official API.") },
-                    singleLine = true
-                )
+                // Tavily card
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Tavily Search (Web Search)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
+                        var shownT by remember { mutableStateOf(false) }
+                        var tKey by remember { mutableStateOf(tavilyKey) }
+                        OutlinedTextField(value = tKey, onValueChange = { tKey = it; onTavilyKeyChange(it) }, modifier = Modifier.fillMaxWidth(), label = { Text("Tavily API Key") }, placeholder = { Text("tvly-... (falls back to DuckDuckGo)") },
+                            visualTransformation = if (shownT) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true, trailingIcon = { TextButton(onClick = { shownT = !shownT }) { Text(if (shownT) "Hide" else "Show") } }
+                        )
+                        Text("1000 free searches/month at tavily.com", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
         item {
@@ -1420,40 +1456,13 @@ private fun SettingsScreen(
             }
         }
         item {
-            Text("Model", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Box {
-                Button(onClick = { modelMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
-                    availableModels.take(30).forEach { modelId ->
-                        DropdownMenuItem(text = { Text(modelId) }, onClick = { onModelChange(modelId); modelMenuOpen = false })
-                    }
-                }
+            TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (showAdvanced) "Hide Advanced Settings ▲" else "Show Advanced Settings ▼", fontWeight = FontWeight.SemiBold)
             }
-            Button(
-                onClick = {
-                    if (apiKey.isBlank()) modelStatus = "Add an API key first."
-                    else {
-                        val cfgEndpoint = if (provider.lowercase() == "custom" && customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
-                        modelStatus = "Loading models from your endpoint…"
-                        providerClient.listModels(
-                            ProviderConfig(endpoint = cfgEndpoint, apiKey = apiKey, model = model),
-                            onSuccess = { loaded ->
-                                availableModels = loaded.ifEmpty { defaultModelsFor(provider) }
-                                modelStatus = if (loaded.isEmpty()) "No models returned; showing defaults." else "Loaded ${loaded.size} models."
-                                modelMenuOpen = loaded.isNotEmpty()
-                            },
-                            onError = { error -> modelStatus = "Could not load models: $error" }
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Load models from endpoint") }
-            modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        item {
-            Text("Prompt Presets", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        if (showAdvanced) {
+            item {
+                Text("Prompt Presets", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("Quick prompts for the composer. Use {selection} for current draft and {page} for screen text.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
@@ -1606,14 +1615,20 @@ private fun SettingsScreen(
                 }
             }
         }
+        }
     }
 }
 
 private fun defaultModelsFor(provider: String): List<String> = when (provider.lowercase()) {
     "anthropic" -> listOf("claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-opus-4-20250514")
-    "google" -> listOf("gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-flash-lite")
+    "google" -> listOf("gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro")
     "deepseek" -> listOf("deepseek-v4-flash", "deepseek-v4-pro")
-    "openrouter" -> listOf("openrouter/free", "openai/gpt-oss-20b:free", "google/gemma-4-31b-it:free", "nvidia/nemotron-3-nano-30b-a3b:free")
+    "openrouter" -> listOf(
+        "openrouter/free", "openai/gpt-oss-20b:free", "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-super-120b-a12b:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free", "nvidia/nemotron-nano-12b-v2-vl:free", "nvidia/nemotron-nano-9b-v2:free",
+        "cohere/north-mini-code:free", "inclusionai/ling-3.0-flash:free", "poolside/laguna-s-2.1:free", "poolside/laguna-xs-2.1:free"
+    )
     "custom" -> listOf("llama3.3:70b", "qwen2.5-coder:32b")
     else -> listOf("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini")
 }

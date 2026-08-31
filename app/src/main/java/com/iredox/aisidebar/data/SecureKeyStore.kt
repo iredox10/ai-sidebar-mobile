@@ -24,6 +24,13 @@ class SecureKeyStore(context: Context) {
         const val KEY_TAVILY = "tavilyKey"
         const val KEY_CUSTOM = "customKey"
         val ALL_KEYS = listOf(KEY_OPENAI, KEY_ANTHROPIC, KEY_GOOGLE, KEY_DEEPSEEK, KEY_OPENROUTER, KEY_TAVILY, KEY_CUSTOM)
+        const val PREFERENCES_NAME = "secure_provider_settings"
+        const val API_KEY_NAME = "api_key"
+        const val KEYSTORE = "AndroidKeyStore"
+        const val KEY_ALIAS = "ai_sidebar_provider_key"
+        const val TRANSFORMATION = "AES/GCM/NoPadding"
+        const val IV_BYTES = 12
+        const val TAG_BITS = 128
     }
 
     fun readApiKey(): String? = readKey(KEY_OPENAI) ?: runCatching {
@@ -93,13 +100,5 @@ class SecureKeyStore(context: Context) {
         }.generateKey()
     }
 
-    private companion object {
-        const val PREFERENCES_NAME = "secure_provider_settings"
-        const val API_KEY_NAME = "api_key"
-        const val KEYSTORE = "AndroidKeyStore"
-        const val KEY_ALIAS = "ai_sidebar_provider_key"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val IV_BYTES = 12
-        const val TAG_BITS = 128
-    }
+
 }
