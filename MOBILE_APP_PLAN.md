@@ -112,6 +112,8 @@ The scaffold now includes accessibility onboarding plus an explicit visible-text
 - Open URL, save in-app bookmark, and download through MediaStore.
 - Prompt presets, auto-search decision, provider usage/cost dashboards and import/export.
 
+The first tool path is now available as a user-triggered web search: DuckDuckGo instant-answer snippets are added as a labeled draft context block for review before the user sends the prompt. Agentic tool loops and source browsing follow.
+
 Text sharing and `ACTION_PROCESS_TEXT` are now wired to prefill the assistant composer. Image, file, and URL sharing are subsequent additions.
 
 ## Android permissions and policy

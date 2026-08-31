@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -95,6 +96,7 @@ import com.iredox.aisidebar.data.StoredConversation
 import com.iredox.aisidebar.data.ProviderSettings
 import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
+import com.iredox.aisidebar.tools.WebSearchClient
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -276,6 +278,7 @@ private fun ChatScreen(
     var screenContextNote by remember { mutableStateOf<String?>(null) }
     var imageDataUrl by remember { mutableStateOf<String?>(null) }
     val client = remember { OpenAiCompatibleClient() }
+    val webSearchClient = remember { WebSearchClient() }
     val context = LocalContext.current
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -422,6 +425,32 @@ private fun ChatScreen(
                     microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }) { Icon(Icons.Default.Mic, "Speak prompt") }
+            IconButton(onClick = {
+                val query = prompt.trim()
+                if (query.isBlank()) {
+                    screenContextNote = "Write a search query first."
+                } else {
+                    screenContextNote = "Searching the web…"
+                    webSearchClient.search(
+                        query = query,
+                        onSuccess = { results ->
+                            if (results.isEmpty()) {
+                                screenContextNote = "No web results were found."
+                            } else {
+                                val contextBlock = buildString {
+                                    append("[Web search results for: $query]\n")
+                                    results.forEachIndexed { index, result ->
+                                        append("${index + 1}. ${result.title}\n${result.snippet}\n${result.url}\n")
+                                    }
+                                }.trim()
+                                prompt = "$query\n\n$contextBlock"
+                                screenContextNote = "Web results added to the draft. Review before sending."
+                            }
+                        },
+                        onError = { error -> screenContextNote = "Web search error: $error" }
+                    )
+                }
+            }) { Icon(Icons.Default.Search, "Search the web and attach results") }
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
