@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -307,6 +308,26 @@ private fun ChatScreen(
             onSharedTextConsumed()
         }
     }
+    fun regenerate(responseIndex: Int) {
+        if (activeRequest != null || provider != "OpenAI-compatible" || apiKey.isBlank()) return
+        val response = messages.getOrNull(responseIndex) ?: return
+        if (response.role != Role.ASSISTANT) return
+        messages[responseIndex] = response.copy(text = "")
+        onMessagesChanged()
+        activeRequest = client.streamChat(
+            config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
+            messages = messages.take(responseIndex).map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
+            onDelta = { delta ->
+                messages[responseIndex] = messages[responseIndex].copy(text = messages[responseIndex].text + delta)
+            },
+            onComplete = { activeRequest = null; onMessagesChanged() },
+            onError = { error ->
+                messages[responseIndex] = messages[responseIndex].copy(text = "Connection error: $error")
+                activeRequest = null
+                onMessagesChanged()
+            }
+        )
+    }
     Column(modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -317,7 +338,12 @@ private fun ChatScreen(
                 Text("New conversation", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text("Your chats stay on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(messages, key = { it.id }) { MessageCard(it) }
+            itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
+                MessageCard(
+                    message = message,
+                    onRegenerate = if (message.role == Role.ASSISTANT && index == messages.lastIndex) ({ regenerate(index) }) else null
+                )
+            }
         }
         screenContextNote?.let {
             Text(
@@ -411,7 +437,7 @@ private fun ChatScreen(
 }
 
 @Composable
-private fun MessageCard(message: ChatMessage) {
+private fun MessageCard(message: ChatMessage, onRegenerate: (() -> Unit)? = null) {
     val isUser = message.role == Role.USER
     val context = LocalContext.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -428,6 +454,11 @@ private fun MessageCard(message: ChatMessage) {
                         clipboard.setPrimaryClip(ClipData.newPlainText("AI Sidebar response", message.text))
                     }, contentPadding = PaddingValues(top = 6.dp)) {
                         Text("Copy")
+                    }
+                    onRegenerate?.let { regenerate ->
+                        TextButton(onClick = regenerate, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
+                            Text("Regenerate")
+                        }
                     }
                 }
             }
