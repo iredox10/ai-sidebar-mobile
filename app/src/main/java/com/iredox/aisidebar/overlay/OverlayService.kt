@@ -89,7 +89,8 @@ class OverlayService : Service() {
             background = roundedBackground(Color.rgb(48, 48, 66), 14.dp)
             setPadding(12.dp, 8.dp, 12.dp, 8.dp)
         }
-        val send = action("Send") { sendOverlayMessage(prompt, response) }
+        lateinit var send: TextView
+        send = action("Send") { sendOverlayMessage(prompt, response, send) }
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18.dp, 16.dp, 18.dp, 16.dp)
@@ -118,11 +119,12 @@ class OverlayService : Service() {
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    private fun sendOverlayMessage(prompt: EditText, response: TextView) {
+    private fun sendOverlayMessage(prompt: EditText, response: TextView, send: TextView) {
         if (activeRequest != null) {
             activeRequest?.cancel()
             activeRequest = null
             response.text = "Response stopped."
+            send.text = "Send"
             return
         }
         val userText = prompt.text.toString().trim()
@@ -136,6 +138,7 @@ class OverlayService : Service() {
         overlayMessages += RemoteChatMessage("user", userText)
         prompt.text.clear()
         response.text = "Thinking…"
+        send.text = "Stop"
         activeRequest = client.streamChat(
             ProviderConfig(endpoint = settings.endpoint, apiKey = key, model = settings.model),
             overlayMessages,
@@ -143,8 +146,9 @@ class OverlayService : Service() {
             onComplete = {
                 overlayMessages += RemoteChatMessage("assistant", response.text.toString())
                 activeRequest = null
+                send.text = "Send"
             },
-            onError = { error -> response.text = "Connection error: $error"; activeRequest = null }
+            onError = { error -> response.text = "Connection error: $error"; activeRequest = null; send.text = "Send" }
         )
     }
 
