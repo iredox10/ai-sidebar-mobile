@@ -9,7 +9,13 @@ data class StoredConversation(
     val id: Long,
     val title: String,
     val updatedAt: Long,
-    val messages: List<StoredChatMessage>
+    val messages: List<StoredChatMessage>,
+    val pinned: Boolean = false,
+    val provider: String = "",
+    val model: String = "",
+    val url: String = "",
+    val domain: String = "",
+    val pageTitle: String = ""
 )
 
 /** Lightweight local persistence for the active conversation. Room replaces this in the history milestone. */
@@ -48,6 +54,12 @@ class ChatStore(context: Context) {
                         id = item.getLong("id"),
                         title = item.getString("title"),
                         updatedAt = item.getLong("updatedAt"),
+                        pinned = item.optBoolean("pinned", false),
+                        provider = item.optString("provider", ""),
+                        model = item.optString("model", ""),
+                        url = item.optString("url", ""),
+                        domain = item.optString("domain", ""),
+                        pageTitle = item.optString("pageTitle", ""),
                         messages = buildList {
                             for (messageIndex in 0 until messages.length()) {
                                 val message = messages.getJSONObject(messageIndex)
@@ -57,18 +69,22 @@ class ChatStore(context: Context) {
                     )
                 )
             }
-        }.sortedByDescending { it.updatedAt }
+        }.sortedWith(compareByDescending<StoredConversation> { it.pinned }.thenByDescending { it.updatedAt })
     }.getOrDefault(emptyList())
 
-    fun saveConversation(conversation: StoredConversation) {
-        val conversations = loadHistory().filterNot { it.id == conversation.id }.toMutableList()
-        conversations += conversation
+    private fun persistHistory(conversations: List<StoredConversation>) {
         val encoded = JSONArray().apply {
-            conversations.sortedByDescending { it.updatedAt }.take(MAX_CONVERSATIONS).forEach { saved ->
+            conversations.sortedWith(compareByDescending<StoredConversation> { it.pinned }.thenByDescending { it.updatedAt }).take(MAX_CONVERSATIONS).forEach { saved ->
                 put(JSONObject().apply {
                     put("id", saved.id)
                     put("title", saved.title)
                     put("updatedAt", saved.updatedAt)
+                    put("pinned", saved.pinned)
+                    put("provider", saved.provider)
+                    put("model", saved.model)
+                    put("url", saved.url)
+                    put("domain", saved.domain)
+                    put("pageTitle", saved.pageTitle)
                     put("messages", JSONArray().apply {
                         saved.messages.forEach { message -> put(JSONObject().put("id", message.id).put("role", message.role).put("text", message.text)) }
                     })
@@ -78,21 +94,15 @@ class ChatStore(context: Context) {
         preferences.edit().putString(HISTORY_KEY, encoded.toString()).apply()
     }
 
+    fun saveConversation(conversation: StoredConversation) {
+        val conversations = loadHistory().filterNot { it.id == conversation.id }.toMutableList()
+        conversations += conversation
+        persistHistory(conversations)
+    }
+
     fun deleteConversation(id: Long) {
         val remaining = loadHistory().filterNot { it.id == id }
-        val encoded = JSONArray().apply {
-            remaining.forEach { saved ->
-                put(JSONObject().apply {
-                    put("id", saved.id)
-                    put("title", saved.title)
-                    put("updatedAt", saved.updatedAt)
-                    put("messages", JSONArray().apply {
-                        saved.messages.forEach { message -> put(JSONObject().put("id", message.id).put("role", message.role).put("text", message.text)) }
-                    })
-                })
-            }
-        }
-        preferences.edit().putString(HISTORY_KEY, encoded.toString()).apply()
+        persistHistory(remaining)
     }
 
     fun renameConversation(id: Long, title: String) {
@@ -101,9 +111,20 @@ class ChatStore(context: Context) {
         saveConversation(existing.copy(title = cleanTitle, updatedAt = System.currentTimeMillis()))
     }
 
+    fun togglePin(id: Long) {
+        val existing = loadHistory().firstOrNull { it.id == id } ?: return
+        saveConversation(existing.copy(pinned = !existing.pinned, updatedAt = System.currentTimeMillis()))
+    }
+
+    fun updateMetadata(id: Long, provider: String, model: String) {
+        val existing = loadHistory().firstOrNull { it.id == id } ?: return
+        if (existing.provider == provider && existing.model == model) return
+        saveConversation(existing.copy(provider = provider, model = model))
+    }
+
     fun exportHistory(): String = JSONObject().apply {
         put("format", "ai-sidebar-mobile")
-        put("version", 1)
+        put("version", 2)
         put("exportedAt", System.currentTimeMillis())
         put("conversations", JSONArray().apply {
             loadHistory().forEach { saved ->
@@ -111,6 +132,12 @@ class ChatStore(context: Context) {
                     put("id", saved.id)
                     put("title", saved.title)
                     put("updatedAt", saved.updatedAt)
+                    put("pinned", saved.pinned)
+                    put("provider", saved.provider)
+                    put("model", saved.model)
+                    put("url", saved.url)
+                    put("domain", saved.domain)
+                    put("pageTitle", saved.pageTitle)
                     put("messages", JSONArray().apply {
                         saved.messages.forEach { message -> put(JSONObject().put("id", message.id).put("role", message.role).put("text", message.text)) }
                     })
@@ -144,6 +171,12 @@ class ChatStore(context: Context) {
                         id = item.optLong("id", System.currentTimeMillis() + index),
                         title = item.optString("title", "Imported conversation"),
                         updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
+                        pinned = item.optBoolean("pinned", false),
+                        provider = item.optString("provider", ""),
+                        model = item.optString("model", ""),
+                        url = item.optString("url", ""),
+                        domain = item.optString("domain", ""),
+                        pageTitle = item.optString("pageTitle", ""),
                         messages = savedMessages
                     )
                 )

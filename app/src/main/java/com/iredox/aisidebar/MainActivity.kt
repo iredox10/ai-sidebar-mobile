@@ -177,12 +177,19 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         val storedMessages = messages.map { StoredChatMessage(it.id, it.role.name, it.text) }
         chatStore.saveMessages(storedMessages)
         chatStore.setActiveConversationId(activeConversationId)
+        val existing = chatStore.loadHistory().firstOrNull { it.id == activeConversationId }
         chatStore.saveConversation(
             StoredConversation(
                 id = activeConversationId,
                 title = conversationTitle(messages),
                 updatedAt = System.currentTimeMillis(),
-                messages = storedMessages
+                messages = storedMessages,
+                pinned = existing?.pinned ?: false,
+                provider = provider,
+                model = model,
+                url = existing?.url ?: "",
+                domain = existing?.domain ?: "",
+                pageTitle = existing?.pageTitle ?: ""
             )
         )
         conversationHistory = chatStore.loadHistory()
@@ -262,7 +269,12 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                 systemPrompt, temperature, customBaseUrl,
                 persistMessages, sharedText, onSharedTextConsumed
             )
-            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, deleteConversation, renameConversation, createNewConversation)
+            Destination.HISTORY -> ChatHistory(
+                Modifier.padding(padding), conversationHistory,
+                openConversation, deleteConversation, renameConversation,
+                onTogglePin = { c -> chatStore.togglePin(c.id); conversationHistory = chatStore.loadHistory() },
+                createNewConversation
+            )
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding),
                 provider, {
@@ -713,43 +725,122 @@ private fun ChatHistory(
     onOpenConversation: (StoredConversation) -> Unit,
     onDeleteConversation: (StoredConversation) -> Unit,
     onRenameConversation: (StoredConversation, String) -> Unit,
+    onTogglePin: (StoredConversation) -> Unit,
     onNewChat: () -> Unit
 ) {
     var pendingDelete by remember { mutableStateOf<StoredConversation?>(null) }
     var editingConversation by remember { mutableStateOf<StoredConversation?>(null) }
     var editedTitle by remember { mutableStateOf("") }
-    Column(modifier.fillMaxSize().padding(20.dp)) {
+    var searchQuery by remember { mutableStateOf("") }
+
+    fun getPreviewText(c: StoredConversation): String {
+        val msgs = c.messages
+        for (i in msgs.size - 1 downTo 0) {
+            val t = msgs[i].text.replace('\n', ' ').trim()
+            if (t.isNotEmpty()) return if (t.length > 80) t.take(80) + "..." else t
+        }
+        return ""
+    }
+    fun formatTime(ts: Long): String {
+        val now = System.currentTimeMillis()
+        val diff = now - ts
+        return when {
+            diff < 60_000 -> "now"
+            diff < 3_600_000 -> "${diff / 60_000}m ago"
+            diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+            diff < 604_800_000 -> "${diff / 86_400_000}d ago"
+            else -> java.text.SimpleDateFormat("MMM d", Locale.getDefault()).format(java.util.Date(ts))
+        }
+    }
+    val query = searchQuery.lowercase().trim()
+    val filtered = if (query.isEmpty()) conversations else conversations.filter { c ->
+        c.title.lowercase().contains(query) || c.messages.any { it.text.lowercase().contains(query) }
+    }
+    val pinned = filtered.filter { it.pinned }
+    val unpinned = filtered.filter { !it.pinned }
+    fun groupByDate(list: List<StoredConversation>): LinkedHashMap<String, List<StoredConversation>> {
+        val map = LinkedHashMap<String, MutableList<StoredConversation>>()
+        val now = System.currentTimeMillis()
+        val cal = java.util.Calendar.getInstance()
+        list.forEach { c ->
+            cal.timeInMillis = now
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0); cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+            val today = cal.timeInMillis
+            cal.add(java.util.Calendar.DAY_OF_YEAR, -1); val yesterday = cal.timeInMillis
+            cal.add(java.util.Calendar.DAY_OF_YEAR, -6); val week = cal.timeInMillis
+            val label = when {
+                c.updatedAt >= today -> "Today"
+                c.updatedAt >= yesterday -> "Yesterday"
+                c.updatedAt >= week -> "Last 7 days"
+                else -> "Older"
+            }
+            map.getOrPut(label) { mutableListOf() }.add(c)
+        }
+        val order = listOf("Today", "Yesterday", "Last 7 days", "Older")
+        val sorted = LinkedHashMap<String, List<StoredConversation>>()
+        order.forEach { if (map.containsKey(it)) sorted[it] = map[it]!! }
+        map.keys.filter { it !in order }.forEach { sorted[it] = map[it]!! }
+        return sorted
+    }
+
+    @Composable
+    fun HistoryItem(c: StoredConversation) {
+        val timeStr = formatTime(c.updatedAt)
+        val preview = getPreviewText(c)
+        Card(modifier = Modifier.fillMaxWidth().clickable { onOpenConversation(c) }) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (c.pinned) Text("★ ", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                        Text(c.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    }
+                    if (preview.isNotBlank()) Text(preview, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(timeStr, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (c.provider.isNotBlank()) Text(c.provider, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        if (c.domain.isNotBlank()) Text(c.domain, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${c.messages.size} msgs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                IconButton(onClick = { onTogglePin(c) }) { Text(if (c.pinned) "★" else "☆") }
+                IconButton(onClick = { editingConversation = c; editedTitle = c.title }) { Icon(Icons.Default.Edit, "Rename") }
+                IconButton(onClick = { pendingDelete = c }) { Icon(Icons.Default.Delete, "Delete") }
+            }
+        }
+    }
+
+    Column(modifier.fillMaxSize().padding(16.dp)) {
         Text("Your conversations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(18.dp))
-        if (conversations.isEmpty()) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Text("Your saved conversations will appear here.", modifier = Modifier.padding(16.dp))
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search conversations...") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true)
+        Spacer(Modifier.height(6.dp))
+        Text("${filtered.size} conversations", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        if (filtered.isEmpty()) {
+            if (query.isNotEmpty()) {
+                Text("No matching conversations", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+            } else {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Text("Your saved conversations will appear here.", modifier = Modifier.padding(16.dp))
+                }
             }
             Spacer(Modifier.weight(1f))
         } else {
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(conversations, key = { it.id }) { conversation ->
-                    Card(modifier = Modifier.fillMaxWidth().clickable { onOpenConversation(conversation) }) {
-                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(conversation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("${conversation.messages.size} messages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            IconButton(onClick = { editingConversation = conversation; editedTitle = conversation.title }) {
-                                Icon(Icons.Default.Edit, "Rename conversation")
-                            }
-                            IconButton(onClick = { pendingDelete = conversation }) {
-                                Icon(Icons.Default.Delete, "Delete conversation")
-                            }
-                        }
-                    }
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (pinned.isNotEmpty()) {
+                    item { Text("Pinned", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+                    items(pinned, key = { it.id }) { HistoryItem(it) }
+                }
+                val groups = groupByDate(unpinned)
+                groups.forEach { (label, list) ->
+                    item { Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    items(list, key = { it.id }) { HistoryItem(it) }
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
         Button(onClick = onNewChat, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.Add, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Start a new chat")
+            Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Start a new chat")
         }
     }
     pendingDelete?.let { conversation ->
@@ -757,9 +848,7 @@ private fun ChatHistory(
             onDismissRequest = { pendingDelete = null },
             title = { Text("Delete conversation?") },
             text = { Text("This removes “${conversation.title}” from this device.") },
-            confirmButton = {
-                TextButton(onClick = { onDeleteConversation(conversation); pendingDelete = null }) { Text("Delete") }
-            },
+            confirmButton = { TextButton(onClick = { onDeleteConversation(conversation); pendingDelete = null }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } }
         )
     }
@@ -768,9 +857,7 @@ private fun ChatHistory(
             onDismissRequest = { editingConversation = null },
             title = { Text("Rename conversation") },
             text = { OutlinedTextField(value = editedTitle, onValueChange = { editedTitle = it }, label = { Text("Title") }, singleLine = true) },
-            confirmButton = {
-                TextButton(onClick = { onRenameConversation(conversation, editedTitle); editingConversation = null }) { Text("Save") }
-            },
+            confirmButton = { TextButton(onClick = { onRenameConversation(conversation, editedTitle); editingConversation = null }) { Text("Save") } },
             dismissButton = { TextButton(onClick = { editingConversation = null }) { Text("Cancel") } }
         )
     }
