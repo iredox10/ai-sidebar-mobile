@@ -106,6 +106,8 @@ The scaffold now includes accessibility onboarding plus an explicit, local-only 
 - Open URL, save in-app bookmark, and download through MediaStore.
 - Prompt presets, auto-search decision, provider usage/cost dashboards and import/export.
 
+Text sharing and `ACTION_PROCESS_TEXT` are now wired to prefill the assistant composer. Image, file, and URL sharing are subsequent additions.
+
 ## Android permissions and policy
 
 `INTERNET`, `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `POST_NOTIFICATIONS` and an accessibility service are expected. Screen capture uses a separate MediaProjection consent flow when needed.

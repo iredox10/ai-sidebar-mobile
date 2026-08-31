@@ -46,6 +46,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -72,10 +73,25 @@ import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
 class MainActivity : ComponentActivity() {
+    private var sharedText by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AISidebarTheme { SidebarApp() } }
+        sharedText = extractSharedText(intent)
+        setContent { AISidebarTheme { SidebarApp(sharedText) { sharedText = null } } }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        sharedText = extractSharedText(intent)
+    }
+
+    private fun extractSharedText(intent: Intent?): String? = when (intent?.action) {
+        Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+        Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+        else -> null
+    }?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 private enum class Destination(val label: String) { CHAT("Assistant"), HISTORY("Chats"), SETTINGS("Settings") }
@@ -85,7 +101,7 @@ private enum class Role { USER, ASSISTANT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SidebarApp() {
+private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     val context = LocalContext.current
     val secureKeyStore = remember { SecureKeyStore(context.applicationContext) }
     val chatStore = remember { ChatStore(context.applicationContext) }
@@ -138,7 +154,7 @@ private fun SidebarApp() {
         }
     ) { padding ->
         when (destination) {
-            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages)
+            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding), provider, { provider = it }, apiKey, {
@@ -167,11 +183,19 @@ private fun ChatScreen(
     apiKey: String,
     endpoint: String,
     model: String,
-    onMessagesChanged: () -> Unit
+    onMessagesChanged: () -> Unit,
+    sharedText: String?,
+    onSharedTextConsumed: () -> Unit
 ) {
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     val client = remember { OpenAiCompatibleClient() }
+    LaunchedEffect(sharedText) {
+        sharedText?.let {
+            prompt = it
+            onSharedTextConsumed()
+        }
+    }
     Column(modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
