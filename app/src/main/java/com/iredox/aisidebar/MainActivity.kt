@@ -82,6 +82,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -529,7 +530,11 @@ private fun MessageCard(
             shape = RoundedCornerShape(18.dp)
         ) {
             Column(Modifier.padding(14.dp)) {
-                Text(message.text, color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                if (isUser) {
+                    Text(message.text, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                } else {
+                    MarkdownMessageText(message.text, MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (!isUser && message.text.isNotBlank()) {
                     TextButton(onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -554,6 +559,33 @@ private fun MessageCard(
                         TextButton(onClick = edit, contentPadding = PaddingValues(top = 6.dp)) { Text("Edit") }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownMessageText(markdown: String, color: Color) {
+    var inCodeBlock = false
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        markdown.lines().forEach { line ->
+            when {
+                line.startsWith("```") -> inCodeBlock = !inCodeBlock
+                inCodeBlock -> Text(
+                    line,
+                    color = color,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.42f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                line.startsWith("### ") -> Text(line.removePrefix("### "), color = color, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                line.startsWith("## ") -> Text(line.removePrefix("## "), color = color, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                line.startsWith("# ") -> Text(line.removePrefix("# "), color = color, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                line.startsWith("- ") || line.startsWith("* ") -> Text("• ${line.drop(2)}", color = color)
+                line.isNotBlank() -> Text(line, color = color)
             }
         }
     }
