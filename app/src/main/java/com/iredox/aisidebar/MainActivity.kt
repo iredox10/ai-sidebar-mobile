@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iredox.aisidebar.overlay.OverlayService
+import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
 class MainActivity : ComponentActivity() {
@@ -210,6 +211,7 @@ private fun SettingsScreen(modifier: Modifier) {
     val context = LocalContext.current
     var provider by remember { mutableStateOf("OpenAI-compatible") }
     var apiKey by remember { mutableStateOf("") }
+    var contextResult by remember { mutableStateOf<String?>(null) }
     val overlayGranted = Settings.canDrawOverlays(context)
 
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -247,6 +249,30 @@ private fun SettingsScreen(modifier: Modifier) {
         item {
             Text("Privacy", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("Screen text is never captured automatically. In a later phase, you will explicitly attach safe visible screen content to a single prompt. Password and sensitive fields will be excluded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Screen context", fontWeight = FontWeight.SemiBold)
+                    Text(if (ScreenReadAccessibilityService.isEnabled()) "Accessibility service connected. You can test a manual capture." else "Enable the AI Sidebar accessibility service to allow manual visible-text capture.")
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = {
+                        if (ScreenReadAccessibilityService.isEnabled()) {
+                            val capture = ScreenReadAccessibilityService.captureActiveScreen()
+                            contextResult = capture?.let { "Captured ${it.visibleText.length} characters from ${it.packageName ?: "the current screen"}. Nothing was sent anywhere." }
+                                ?: "No visible text was available."
+                        } else {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                    }) {
+                        Text(if (ScreenReadAccessibilityService.isEnabled()) "Test visible-text capture" else "Open Accessibility settings")
+                    }
+                    contextResult?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(it, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
         }
     }
 }

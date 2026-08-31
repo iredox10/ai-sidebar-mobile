@@ -94,6 +94,8 @@ Key modules/packages:
 - User-triggered screenshot flow and optional OCR/vision attachment.
 - Long-press element selector where Android exposes node bounds.
 
+The scaffold now includes accessibility onboarding plus an explicit, local-only visible-text capture test. Attaching that context to an AI prompt remains pending the provider and persistent-chat milestones.
+
 ### Phase 6 — tools and parity
 
 - Web search and URL fetch with sources.
