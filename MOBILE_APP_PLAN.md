@@ -72,7 +72,7 @@ Key modules/packages:
 - OpenAI-compatible streaming client with cancellation, errors and token usage.
 - First real provider path: OpenAI / OpenRouter / DeepSeek-compatible endpoints.
 
-The initial OpenAI-compatible SSE client and its cancellable chat integration are now in progress. It accepts an API key, endpoint and model for the current session only; secure persistent key storage follows.
+The initial OpenAI-compatible SSE client and its cancellable chat integration are now in progress. API keys are stored using a device-bound Android Keystore AES-GCM key; endpoint and model persistence follow with the profile system.
 
 ### Phase 3 — providers and assistant features
 

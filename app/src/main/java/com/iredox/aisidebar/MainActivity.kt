@@ -65,6 +65,7 @@ import com.iredox.aisidebar.api.OpenAiCompatibleClient
 import com.iredox.aisidebar.api.ProviderConfig
 import com.iredox.aisidebar.api.RemoteChatMessage
 import com.iredox.aisidebar.api.StreamingRequest
+import com.iredox.aisidebar.data.SecureKeyStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
@@ -83,9 +84,11 @@ private enum class Role { USER, ASSISTANT }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SidebarApp() {
+    val context = LocalContext.current
+    val secureKeyStore = remember { SecureKeyStore(context.applicationContext) }
     var destination by remember { mutableStateOf(Destination.CHAT) }
     var provider by remember { mutableStateOf("OpenAI-compatible") }
-    var apiKey by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf(secureKeyStore.readApiKey().orEmpty()) }
     var endpoint by remember { mutableStateOf("https://api.openai.com/v1/chat/completions") }
     var model by remember { mutableStateOf("gpt-4o-mini") }
     val messages = remember {
@@ -130,7 +133,10 @@ private fun SidebarApp() {
             Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
             Destination.SETTINGS -> SettingsScreen(
-                Modifier.padding(padding), provider, { provider = it }, apiKey, { apiKey = it },
+                Modifier.padding(padding), provider, { provider = it }, apiKey, {
+                    apiKey = it
+                    secureKeyStore.writeApiKey(it)
+                },
                 endpoint, { endpoint = it }, model, { model = it }
             )
         }
@@ -285,7 +291,7 @@ private fun SettingsScreen(
                 onValueChange = onApiKeyChange,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("API key") },
-                placeholder = { Text("Kept only for this app session") },
+                placeholder = { Text("Encrypted on this device") },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true
             )
