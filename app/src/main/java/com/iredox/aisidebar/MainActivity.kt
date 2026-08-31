@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -274,6 +275,18 @@ private fun ChatScreen(
             screenContextNote = "Image attached. Choose a vision-capable model before sending."
         }.onFailure { error -> screenContextNote = error.message ?: "Could not attach that image." }
     }
+    val textFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read file")
+            require(bytes.size <= 1_000_000) { "Text files must be 1 MB or smaller." }
+            bytes.toString(Charsets.UTF_8).trim().takeIf { it.isNotBlank() } ?: error("The selected file is empty.")
+        }.onSuccess { text ->
+            val contextBlock = "[Attached text file]\n$text"
+            prompt = listOf(prompt.trim(), contextBlock).filter { it.isNotBlank() }.joinToString("\n\n")
+            screenContextNote = "Text file added to the draft. Review it before sending."
+        }.onFailure { error -> screenContextNote = error.message ?: "Could not attach that file." }
+    }
     LaunchedEffect(sharedText) {
         sharedText?.let {
             prompt = it
@@ -321,6 +334,9 @@ private fun ChatScreen(
             }) { Icon(Icons.Default.Visibility, "Attach visible screen context") }
             IconButton(onClick = { imagePicker.launch("image/*") }) {
                 Icon(Icons.Default.Image, "Attach image")
+            }
+            IconButton(onClick = { textFilePicker.launch("text/plain") }) {
+                Icon(Icons.Default.AttachFile, "Attach text file")
             }
             OutlinedTextField(
                 value = prompt,
