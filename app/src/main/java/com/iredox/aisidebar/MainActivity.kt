@@ -70,6 +70,8 @@ import com.iredox.aisidebar.api.StreamingRequest
 import com.iredox.aisidebar.data.SecureKeyStore
 import com.iredox.aisidebar.data.ChatStore
 import com.iredox.aisidebar.data.StoredChatMessage
+import com.iredox.aisidebar.data.ProviderSettings
+import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
@@ -106,11 +108,13 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     val context = LocalContext.current
     val secureKeyStore = remember { SecureKeyStore(context.applicationContext) }
     val chatStore = remember { ChatStore(context.applicationContext) }
+    val providerSettingsStore = remember { ProviderSettingsStore(context.applicationContext) }
+    val savedProviderSettings = remember { providerSettingsStore.read() }
     var destination by remember { mutableStateOf(Destination.CHAT) }
-    var provider by remember { mutableStateOf("OpenAI-compatible") }
+    var provider by remember { mutableStateOf(savedProviderSettings.provider) }
     var apiKey by remember { mutableStateOf(secureKeyStore.readApiKey().orEmpty()) }
-    var endpoint by remember { mutableStateOf("https://api.openai.com/v1/chat/completions") }
-    var model by remember { mutableStateOf("gpt-4o-mini") }
+    var endpoint by remember { mutableStateOf(savedProviderSettings.endpoint) }
+    var model by remember { mutableStateOf(savedProviderSettings.model) }
     val messages = remember {
         val restored = chatStore.loadMessages().map { ChatMessage(it.id, Role.valueOf(it.role), it.text) }
         mutableStateListOf<ChatMessage>().apply {
@@ -158,11 +162,20 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
             Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
             Destination.SETTINGS -> SettingsScreen(
-                Modifier.padding(padding), provider, { provider = it }, apiKey, {
+                Modifier.padding(padding), provider, {
+                    provider = it
+                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
+                }, apiKey, {
                     apiKey = it
                     secureKeyStore.writeApiKey(it)
                 },
-                endpoint, { endpoint = it }, model, { model = it }
+                endpoint, {
+                    endpoint = it
+                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
+                }, model, {
+                    model = it
+                    providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
+                }
             )
         }
     }

@@ -74,7 +74,7 @@ Key modules/packages:
 
 The scaffold persists the active conversation locally today. Full multi-chat history, indexing, pins and usage records move to Room in the next persistence increment.
 
-The initial OpenAI-compatible SSE client and its cancellable chat integration are now in progress. API keys are stored using a device-bound Android Keystore AES-GCM key; endpoint and model persistence follow with the profile system.
+The initial OpenAI-compatible SSE client and its cancellable chat integration are now in progress. API keys are stored using a device-bound Android Keystore AES-GCM key, while provider, endpoint, and model are persisted separately as non-secret settings. Multi-profile support follows.
 
 ### Phase 3 — providers and assistant features
 
