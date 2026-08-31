@@ -1,20 +1,24 @@
 package com.iredox.aisidebar
 
+import android.Manifest
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
+import android.speech.RecognizerIntent
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +46,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
@@ -305,6 +310,23 @@ private fun ChatScreen(
             }
             .onFailure { error -> screenContextNote = error.message ?: "Could not attach that PDF." }
     }
+    val voiceInputLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val transcript = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!transcript.isNullOrBlank()) {
+            prompt = listOf(prompt.trim(), transcript).filter { it.isNotBlank() }.joinToString(" ")
+        } else {
+            screenContextNote = "No speech was recognized."
+        }
+    }
+    val startVoiceInput = {
+        voiceInputLauncher.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your question")
+        })
+    }
+    val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startVoiceInput() else screenContextNote = "Microphone permission is needed for voice input."
+    }
     LaunchedEffect(sharedText) {
         sharedText?.let {
             prompt = it
@@ -393,6 +415,13 @@ private fun ChatScreen(
             IconButton(onClick = { pdfPicker.launch("application/pdf") }) {
                 Icon(Icons.Default.ContentCopy, "Attach first PDF page")
             }
+            IconButton(onClick = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    startVoiceInput()
+                } else {
+                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }) { Icon(Icons.Default.Mic, "Speak prompt") }
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },

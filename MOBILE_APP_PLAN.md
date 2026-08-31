@@ -82,7 +82,7 @@ The initial OpenAI-compatible SSE client and its cancellable chat integration ar
 - Model profiles and connection test action.
 - Markdown, copy/regenerate/edit-resend, TTS/STT and share input.
 
-Assistant replies now include direct copy, regenerate, and on-device read-aloud actions. Regenerate replaces the most recent assistant response using the existing conversation context. The latest user message can be returned to the composer for editing and resending. Markdown and speech-to-text remain subsequent chat-polish tasks.
+Assistant replies now include direct copy, regenerate, and on-device read-aloud actions. Regenerate replaces the most recent assistant response using the existing conversation context. The latest user message can be returned to the composer for editing and resending. The composer also supports system speech recognition after an Android microphone-permission prompt. Markdown remains a subsequent chat-polish task.
 - Attach images, PDFs and text files, with bounded context size.
 
 The first image attachment path is implemented: the system picker creates a data-URL attachment capped at 5 MB and sends it in the standard OpenAI vision content format. Plain-text files can now be added as an explicitly labelled, 1 MB bounded draft context block. PDFs are handled transparently as a locally rendered first-page image attachment for vision-capable models; multi-page extraction is a later enhancement.
