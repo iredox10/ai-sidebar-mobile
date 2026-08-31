@@ -809,6 +809,11 @@ private fun SettingsScreen(
     var modelMenuOpen by remember { mutableStateOf(false) }
     var modelStatus by remember { mutableStateOf<String?>(null) }
     var availableModels by remember(provider) { mutableStateOf(defaultModelsFor(provider)) }
+    val profileStore = remember { com.iredox.aisidebar.data.ProfileStore(context.applicationContext) }
+    var profilesState by remember { mutableStateOf(profileStore.load()) }
+    var profileMenuOpen by remember { mutableStateOf(false) }
+    var profileRenameOpen by remember { mutableStateOf(false) }
+    var profileRenameText by remember { mutableStateOf("") }
     val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -836,6 +841,81 @@ private fun SettingsScreen(
     val overlayGranted = Settings.canDrawOverlays(context)
 
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            Text("Profiles", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Bundle provider, model and prompt. Keys are shared globally.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            Button(onClick = { profileMenuOpen = true }, modifier = Modifier.fillMaxWidth()) { Text(profilesState.second, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            DropdownMenu(expanded = profileMenuOpen, onDismissRequest = { profileMenuOpen = false }) {
+                                profilesState.first.keys.forEach { name ->
+                                    DropdownMenuItem(text = { Text(name + if (name == profilesState.second) " (active)" else "") }, onClick = {
+                                        profileMenuOpen = false
+                                        profileStore.activate(name)
+                                        profilesState = profileStore.load()
+                                        val s = profilesState.first[name] ?: return@DropdownMenuItem
+                                        onProviderChange(s.provider)
+                                        onModelChange(s.model)
+                                        onSystemPromptChange(s.systemPrompt)
+                                        onTemperatureChange(s.temperature)
+                                        onCustomBaseUrlChange(s.customBaseUrl)
+                                        onCustomNameChange(s.customName)
+                                        onCustomModelsChange(s.customModels)
+                                        onEndpointChange(s.endpoint)
+                                    })
+                                }
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            val base = "Profile"
+                            var n = profilesState.first.size + 1
+                            var name = "$base $n"
+                            while (profilesState.first.containsKey(name)) { n++; name = "$base $n" }
+                            val current = com.iredox.aisidebar.data.ProviderSettings(provider, endpoint, model, systemPrompt, temperature, customName, customBaseUrl, customModels)
+                            profileStore.create(name, current)
+                            profilesState = profileStore.load()
+                        }) { Text("New") }
+                        Button(onClick = {
+                            val src = profilesState.second
+                            var name = "$src copy"
+                            var n = 2
+                            while (profilesState.first.containsKey(name)) { name = "$src copy $n"; n++ }
+                            profileStore.duplicate(src, name)
+                            profilesState = profileStore.load()
+                        }) { Text("Duplicate") }
+                        Button(onClick = {
+                            if (profilesState.first.size <= 1) return@Button
+                            profileStore.delete(profilesState.second)
+                            profilesState = profileStore.load()
+                            val s = profilesState.first[profilesState.second] ?: return@Button
+                            onProviderChange(s.provider); onModelChange(s.model); onSystemPromptChange(s.systemPrompt); onTemperatureChange(s.temperature)
+                            onCustomBaseUrlChange(s.customBaseUrl); onCustomNameChange(s.customName); onCustomModelsChange(s.customModels); onEndpointChange(s.endpoint)
+                        }) { Text("Delete") }
+                        Button(onClick = { profileRenameText = profilesState.second; profileRenameOpen = true }) { Text("Rename") }
+                    }
+                    if (profileRenameOpen) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(value = profileRenameText, onValueChange = { profileRenameText = it }, label = { Text("New name") }, modifier = Modifier.weight(1f), singleLine = true)
+                            Button(onClick = {
+                                val newName = profileRenameText.trim()
+                                if (newName.isNotBlank() && !profilesState.first.containsKey(newName)) {
+                                    profileStore.rename(profilesState.second, newName)
+                                    profilesState = profileStore.load()
+                                }
+                                profileRenameOpen = false
+                            }) { Text("OK") }
+                            TextButton(onClick = { profileRenameOpen = false }) { Text("Cancel") }
+                        }
+                    }
+                }
+            }
+        }
         item {
             Text("Provider", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("Choose a provider — keys are stored encrypted on device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
