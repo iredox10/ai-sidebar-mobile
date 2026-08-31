@@ -46,10 +46,20 @@ class ProviderSettingsStore(context: Context) {
             "Google" -> "google"
             else -> rawProvider.lowercase().takeIf { it in setOf("openai","anthropic","google","deepseek","openrouter","custom") } ?: rawProvider.lowercase()
         }
+        var endpoint = preferences.getString(ENDPOINT, null) ?: ProviderSettings().endpoint
+        // fix typo that slipped into store (opepnai / missing s)
+        if (endpoint.contains("opepnai") || endpoint == "https://api.openai.com/v1/chat/completion") {
+            endpoint = "https://api.openai.com/v1/chat/completions"
+        }
+        var model = preferences.getString(MODEL, null) ?: ProviderSettings().model
+        // auto-fix model/provider mismatch (e.g. openrouter with gpt-4o-mini)
+        if (provider == "openrouter" && model !in listOf("openrouter/free", "openai/gpt-oss-20b:free", "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-super-120b-a12b:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "nvidia/nemotron-3-nano-30b-a3b:free", "nvidia/nemotron-nano-12b-v2-vl:free", "nvidia/nemotron-nano-9b-v2:free", "cohere/north-mini-code:free", "inclusionai/ling-3.0-flash:free", "poolside/laguna-s-2.1:free", "poolside/laguna-xs-2.1:free")) {
+            model = "openrouter/free"
+        }
         return ProviderSettings(
             provider = provider,
-            endpoint = preferences.getString(ENDPOINT, null) ?: ProviderSettings().endpoint,
-            model = preferences.getString(MODEL, null) ?: ProviderSettings().model,
+            endpoint = endpoint,
+            model = model,
             systemPrompt = preferences.getString(SYSTEM_PROMPT, null) ?: ProviderSettings().systemPrompt,
             temperature = preferences.getFloat(TEMPERATURE, ProviderSettings().temperature),
             customName = preferences.getString(CUSTOM_NAME, null) ?: "",

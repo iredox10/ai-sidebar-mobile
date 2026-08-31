@@ -1354,7 +1354,13 @@ private fun SettingsScreen(
                         onClick = {
                             if (apiKey.isBlank()) modelStatus = "Add the ${provider} key first."
                             else {
-                                val cfgEndpoint = if (provider.lowercase() == "custom" && customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
+                                val cfgEndpoint = when (provider.lowercase()) {
+                                    "openai" -> "https://api.openai.com/v1/chat/completions"
+                                    "deepseek" -> "https://api.deepseek.com/chat/completions"
+                                    "openrouter" -> "https://openrouter.ai/api/v1/chat/completions"
+                                    "custom" -> if (customBaseUrl.isNotBlank()) customBaseUrl.trimEnd('/') + "/chat/completions" else endpoint
+                                    else -> endpoint
+                                }
                                 modelStatus = "Loading models..."
                                 providerClient.listModels(ProviderConfig(endpoint = cfgEndpoint, apiKey = apiKey, model = model),
                                     onSuccess = { loaded -> availableModels = loaded.ifEmpty { defaultModelsFor(provider) }; modelStatus = if (loaded.isEmpty()) "No models, showing defaults." else "Loaded ${loaded.size} models."; modelMenuOpen = loaded.isNotEmpty() },
