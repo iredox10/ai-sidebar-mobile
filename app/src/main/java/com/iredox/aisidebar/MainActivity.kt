@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -189,7 +190,9 @@ private fun ChatScreen(
 ) {
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
+    var screenContextNote by remember { mutableStateOf<String?>(null) }
     val client = remember { OpenAiCompatibleClient() }
+    val context = LocalContext.current
     LaunchedEffect(sharedText) {
         sharedText?.let {
             prompt = it
@@ -208,10 +211,33 @@ private fun ChatScreen(
             }
             items(messages, key = { it.id }) { MessageCard(it) }
         }
+        screenContextNote?.let {
+            Text(
+                it,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            IconButton(onClick = {
+                if (!ScreenReadAccessibilityService.isEnabled()) {
+                    screenContextNote = "Enable Accessibility to attach visible screen text."
+                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } else {
+                    val capture = ScreenReadAccessibilityService.captureActiveScreen()
+                    if (capture?.visibleText.isNullOrBlank()) {
+                        screenContextNote = "No safe visible text was available on this screen."
+                    } else {
+                        val contextBlock = "[Visible screen context from ${capture?.packageName ?: "current app"}]\n${capture?.visibleText}"
+                        prompt = listOf(prompt.trim(), contextBlock).filter { it.isNotBlank() }.joinToString("\n\n")
+                        screenContextNote = "Visible screen context added. Review it before sending."
+                    }
+                }
+            }) { Icon(Icons.Default.Visibility, "Attach visible screen context") }
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },

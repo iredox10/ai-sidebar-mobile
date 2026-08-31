@@ -98,7 +98,7 @@ The initial OpenAI-compatible SSE client and its cancellable chat integration ar
 - User-triggered screenshot flow and optional OCR/vision attachment.
 - Long-press element selector where Android exposes node bounds.
 
-The scaffold now includes accessibility onboarding plus an explicit, local-only visible-text capture test. Attaching that context to an AI prompt remains pending the provider and persistent-chat milestones.
+The scaffold now includes accessibility onboarding plus an explicit visible-text capture action in the composer. It adds a clearly labelled context block for the user to review before sending; it does not capture text automatically.
 
 ### Phase 6 — tools and parity
 
