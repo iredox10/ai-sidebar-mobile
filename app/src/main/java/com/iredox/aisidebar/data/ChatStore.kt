@@ -95,6 +95,12 @@ class ChatStore(context: Context) {
         preferences.edit().putString(HISTORY_KEY, encoded.toString()).apply()
     }
 
+    fun renameConversation(id: Long, title: String) {
+        val existing = loadHistory().firstOrNull { it.id == id } ?: return
+        val cleanTitle = title.trim().takeIf { it.isNotEmpty() } ?: return
+        saveConversation(existing.copy(title = cleanTitle, updatedAt = System.currentTimeMillis()))
+    }
+
     fun activeConversationId(): Long? = preferences.getLong(ACTIVE_ID_KEY, NO_CONVERSATION).takeIf { it != NO_CONVERSATION }
 
     fun setActiveConversationId(id: Long) {

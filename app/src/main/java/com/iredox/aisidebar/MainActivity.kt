@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
@@ -171,6 +172,10 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
             conversationHistory = chatStore.loadHistory()
         }
     }
+    val renameConversation: (StoredConversation, String) -> Unit = { conversation, title ->
+        chatStore.renameConversation(conversation.id, title)
+        conversationHistory = chatStore.loadHistory()
+    }
 
     Scaffold(
         topBar = {
@@ -206,7 +211,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     ) { padding ->
         when (destination) {
             Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
-            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, deleteConversation, createNewConversation)
+            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, deleteConversation, renameConversation, createNewConversation)
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding), provider, {
                     provider = it
@@ -365,9 +370,12 @@ private fun ChatHistory(
     conversations: List<StoredConversation>,
     onOpenConversation: (StoredConversation) -> Unit,
     onDeleteConversation: (StoredConversation) -> Unit,
+    onRenameConversation: (StoredConversation, String) -> Unit,
     onNewChat: () -> Unit
 ) {
     var pendingDelete by remember { mutableStateOf<StoredConversation?>(null) }
+    var editingConversation by remember { mutableStateOf<StoredConversation?>(null) }
+    var editedTitle by remember { mutableStateOf("") }
     Column(modifier.fillMaxSize().padding(20.dp)) {
         Text("Your conversations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(18.dp))
@@ -384,6 +392,9 @@ private fun ChatHistory(
                             Column(Modifier.weight(1f)) {
                                 Text(conversation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text("${conversation.messages.size} messages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { editingConversation = conversation; editedTitle = conversation.title }) {
+                                Icon(Icons.Default.Edit, "Rename conversation")
                             }
                             IconButton(onClick = { pendingDelete = conversation }) {
                                 Icon(Icons.Default.Delete, "Delete conversation")
@@ -408,6 +419,17 @@ private fun ChatHistory(
                 TextButton(onClick = { onDeleteConversation(conversation); pendingDelete = null }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } }
+        )
+    }
+    editingConversation?.let { conversation ->
+        AlertDialog(
+            onDismissRequest = { editingConversation = null },
+            title = { Text("Rename conversation") },
+            text = { OutlinedTextField(value = editedTitle, onValueChange = { editedTitle = it }, label = { Text("Title") }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = { onRenameConversation(conversation, editedTitle); editingConversation = null }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingConversation = null }) { Text("Cancel") } }
         )
     }
 }
