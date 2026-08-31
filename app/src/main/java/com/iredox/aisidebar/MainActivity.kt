@@ -9,6 +9,7 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -61,6 +62,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -90,6 +92,7 @@ import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var sharedText by mutableStateOf<String?>(null)
@@ -453,6 +456,10 @@ private fun MessageCard(
 ) {
     val isUser = message.role == Role.USER
     val context = LocalContext.current
+    val textToSpeech = remember { TextToSpeech(context.applicationContext) { } }
+    DisposableEffect(textToSpeech) {
+        onDispose { textToSpeech.shutdown() }
+    }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Card(
             modifier = Modifier.fillMaxWidth(0.87f),
@@ -472,6 +479,12 @@ private fun MessageCard(
                         TextButton(onClick = regenerate, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
                             Text("Regenerate")
                         }
+                    }
+                    TextButton(onClick = {
+                        textToSpeech.language = Locale.getDefault()
+                        textToSpeech.speak(message.text, TextToSpeech.QUEUE_FLUSH, null, "reply-${message.id}")
+                    }, contentPadding = PaddingValues(start = 10.dp, top = 6.dp)) {
+                        Text("Read aloud")
                     }
                 }
                 if (isUser) {
