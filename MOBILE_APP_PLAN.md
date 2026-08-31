@@ -83,6 +83,8 @@ The initial OpenAI-compatible SSE client and its cancellable chat integration ar
 - Markdown, copy/regenerate/edit-resend, TTS/STT and share input.
 - Attach images, PDFs and text files, with bounded context size.
 
+The first image attachment path is implemented: the system picker creates a data-URL attachment capped at 5 MB and sends it in the standard OpenAI vision content format. PDF and text-file extraction follow.
+
 ### Phase 4 — floating overlay
 
 - Foreground `OverlayService` with persistent notification.

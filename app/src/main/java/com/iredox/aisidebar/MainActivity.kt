@@ -5,8 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +34,7 @@ import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
@@ -255,8 +259,21 @@ private fun ChatScreen(
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     var screenContextNote by remember { mutableStateOf<String?>(null) }
+    var imageDataUrl by remember { mutableStateOf<String?>(null) }
     val client = remember { OpenAiCompatibleClient() }
     val context = LocalContext.current
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read image")
+            require(bytes.size <= 5 * 1024 * 1024) { "Images must be 5 MB or smaller." }
+            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+            "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+        }.onSuccess {
+            imageDataUrl = it
+            screenContextNote = "Image attached. Choose a vision-capable model before sending."
+        }.onFailure { error -> screenContextNote = error.message ?: "Could not attach that image." }
+    }
     LaunchedEffect(sharedText) {
         sharedText?.let {
             prompt = it
@@ -302,6 +319,9 @@ private fun ChatScreen(
                     }
                 }
             }) { Icon(Icons.Default.Visibility, "Attach visible screen context") }
+            IconButton(onClick = { imagePicker.launch("image/*") }) {
+                Icon(Icons.Default.Image, "Attach image")
+            }
             OutlinedTextField(
                 value = prompt,
                 onValueChange = { prompt = it },
@@ -318,7 +338,7 @@ private fun ChatScreen(
                     activeRequest = null
                     onMessagesChanged()
                 } else if (cleanPrompt.isNotEmpty()) {
-                    messages += ChatMessage(System.nanoTime(), Role.USER, cleanPrompt)
+                    messages += ChatMessage(System.nanoTime(), Role.USER, if (imageDataUrl == null) cleanPrompt else "[Image attached] $cleanPrompt")
                     val responseId = System.nanoTime() + 1
                     messages += ChatMessage(responseId, Role.ASSISTANT, "")
                     onMessagesChanged()
@@ -328,9 +348,15 @@ private fun ChatScreen(
                         messages[messageIndex] = messages[messageIndex].copy(text = if (apiKey.isBlank()) "Add an API key under Settings to start streaming replies." else "$provider streaming will be added after the OpenAI-compatible path.")
                         onMessagesChanged()
                     } else {
+                        val outgoingMessages = messages.filter { it.id != responseId }
+                            .map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) }
+                            .toMutableList()
+                        if (imageDataUrl != null && outgoingMessages.isNotEmpty()) {
+                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = cleanPrompt, imageDataUrl = imageDataUrl)
+                        }
                         activeRequest = client.streamChat(
                             config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
-                            messages = messages.filter { it.id != responseId }.map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
+                            messages = outgoingMessages,
                             onDelta = { delta ->
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
                                 if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
@@ -343,6 +369,7 @@ private fun ChatScreen(
                                 onMessagesChanged()
                             }
                         )
+                        imageDataUrl = null
                     }
                 }
             }) { Icon(if (activeRequest == null) Icons.Default.Send else Icons.Default.Close, if (activeRequest == null) "Send" else "Stop response") }

@@ -15,7 +15,7 @@ data class ProviderConfig(
     val model: String = "gpt-4o-mini"
 )
 
-data class RemoteChatMessage(val role: String, val content: String)
+data class RemoteChatMessage(val role: String, val content: String, val imageDataUrl: String? = null)
 
 /**
  * Small dependency-free SSE client for the OpenAI chat-completions protocol.
@@ -46,7 +46,9 @@ class OpenAiCompatibleClient {
                     put("model", config.model)
                     put("stream", true)
                     put("messages", JSONArray().apply {
-                        messages.forEach { message -> put(JSONObject().put("role", message.role).put("content", message.content)) }
+                        messages.forEach { message ->
+                            put(JSONObject().put("role", message.role).put("content", message.contentPayload()))
+                        }
                     })
                 }
                 OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(body.toString()) }
@@ -80,6 +82,11 @@ class OpenAiCompatibleClient {
 
     private fun mainThread(action: () -> Unit) = Handler(Looper.getMainLooper()).post(action)
 }
+
+private fun RemoteChatMessage.contentPayload(): Any = imageDataUrl?.let { dataUrl ->
+    JSONArray().put(JSONObject().put("type", "text").put("text", content))
+        .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", dataUrl)))
+} ?: content
 
 class StreamingRequest internal constructor() {
     @Volatile internal var connection: HttpURLConnection? = null
