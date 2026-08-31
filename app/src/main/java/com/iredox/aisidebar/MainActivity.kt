@@ -682,34 +682,168 @@ private fun MessageCard(
 @Composable
 private fun MarkdownMessageText(markdown: String, color: Color) {
     var inCodeBlock = false
+    var codeBlockLang = ""
     val uriHandler = LocalUriHandler.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        markdown.lines().forEach { line ->
+        val lines = markdown.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
             when {
-                line.startsWith("```") -> inCodeBlock = !inCodeBlock
-                inCodeBlock -> Text(
-                    line,
-                    color = color,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.42f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-                line.startsWith("### ") -> Text(line.removePrefix("### "), color = color, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                line.startsWith("## ") -> Text(line.removePrefix("## "), color = color, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                line.startsWith("# ") -> Text(line.removePrefix("# "), color = color, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                line.startsWith("- ") || line.startsWith("* ") -> Text("• ${line.drop(2)}", color = color)
-                line.startsWith("https://") || line.startsWith("http://") -> Text(
-                    line,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { uriHandler.openUri(line) }
-                )
-                line.isNotBlank() -> Text(line, color = color)
+                line.startsWith("```") -> {
+                    if (!inCodeBlock) {
+                        codeBlockLang = line.removePrefix("```").trim()
+                        inCodeBlock = true
+                    } else {
+                        inCodeBlock = false; codeBlockLang = ""
+                    }
+                }
+                inCodeBlock -> {
+                    Text(
+                        line,
+                        color = color,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.42f)).padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                line.trim().matches(Regex("^\\|?.*\\|.*\\|?.*")) && i + 1 < lines.size && lines[i + 1].trim().matches(Regex("^\\|?[\\s:-]+\\|[\\s|:-]+.*")) -> {
+                    // simple markdown table header + separator -> render header and rows as monospace rows
+                    val headers = line.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (headers.isNotEmpty()) {
+                        Text(headers.joinToString(" | "), color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(6.dp))
+                    }
+                    i++ // skip separator
+                    // render following table rows while they contain |
+                    while (i + 1 < lines.size && lines[i + 1].contains("|")) {
+                        i++; val row = lines[i].split("|").map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" | ")
+                        if (row.isNotBlank()) Text(row, color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp))
+                    }
+                }
+                line.startsWith("### ") -> Text(line.removePrefix("### ").trim(), color = color, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                line.startsWith("## ") -> Text(line.removePrefix("## ").trim(), color = color, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                line.startsWith("# ") -> Text(line.removePrefix("# ").trim(), color = color, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                line.startsWith("> ") -> Text(line.removePrefix("> ").trim(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.surfaceVariant).padding(6.dp))
+                line.startsWith("- ") || line.startsWith("* ") || line.matches(Regex("^\\d+\\.\\s.*")) -> {
+                    val content = if (line.startsWith("- ") || line.startsWith("* ")) line.drop(2) else line.replaceFirst(Regex("^\\d+\\.\\s"), "")
+                    InlineMarkdownText("• $content", color, uriHandler)
+                }
+                line.trim() == "---" || line.trim() == "***" -> HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                line.trim().startsWith("https://") || line.trim().startsWith("http://") -> {
+                    val trimmed = line.trim()
+                    androidx.compose.foundation.text.ClickableText(
+                        text = androidx.compose.ui.text.AnnotatedString(trimmed),
+                        style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.primary),
+                        onClick = { uriHandler.openUri(trimmed) }
+                    )
+                }
+                line.isNotBlank() -> InlineMarkdownText(line, color, uriHandler)
+                else -> Spacer(Modifier.height(4.dp))
+            }
+            i++
+        }
+    }
+}
+
+@Composable
+private fun InlineMarkdownText(raw: String, color: Color, uriHandler: androidx.compose.ui.platform.UriHandler) {
+    // Parse inline: **bold**, *italic*, `code`, [label](url)
+    val annotated = androidx.compose.ui.text.buildAnnotatedString {
+        var idx = 0
+        val linkPattern = Regex("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)")
+        // first extract links, then handle bold/italic/code inside
+        val tokens = mutableListOf<Pair<String, String?>>() // text, url?
+        var last = 0
+        linkPattern.findAll(raw).forEach { m ->
+            if (m.range.first > last) tokens.add(raw.substring(last, m.range.first) to null)
+            tokens.add(m.groupValues[1] to m.groupValues[2])
+            last = m.range.last + 1
+        }
+        if (last < raw.length) tokens.add(raw.substring(last) to null)
+        tokens.forEach { (segment, url) ->
+            if (url != null) {
+                pushStringAnnotation(tag = "URL", annotation = url)
+                withStyle(style = androidx.compose.ui.text.SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)) { append(segment) }
+                pop()
+            } else {
+                // handle **bold**, *italic*, `code` in segment
+                var s = segment
+                // code `...`
+                val parts = s.split("`")
+                parts.forEachIndexed { pi, part ->
+                    if (pi % 2 == 1) {
+                        withStyle(style = androidx.compose.ui.text.SpanStyle(fontFamily = FontFamily.Monospace, background = MaterialTheme.colorScheme.surfaceVariant, fontSize = MaterialTheme.typography.bodySmall.fontSize)) { append(part) }
+                    } else {
+                        // bold **...**
+                        var p = part
+                        val boldRegex = Regex("\\*\\*(.+?)\\*\\*")
+                        var bLast = 0
+                        val boldMatches = boldRegex.findAll(p).toList()
+                        if (boldMatches.isEmpty()) {
+                            // italic *...* or _..._
+                            val italicRegex = Regex("(\\*|_)([^*_]+?)\\1")
+                            var iLast = 0
+                            var italics = ""
+                            // we will just append with italic handling
+                            val italicMatches = italicRegex.findAll(p).toList()
+                            if (italicMatches.isEmpty()) {
+                                append(p)
+                            } else {
+                                italicMatches.forEach { im ->
+                                    if (im.range.first > iLast) append(p.substring(iLast, im.range.first))
+                                    withStyle(style = androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { append(im.groupValues[2]) }
+                                    iLast = im.range.last + 1
+                                }
+                                if (iLast < p.length) append(p.substring(iLast))
+                            }
+                        } else {
+                            var cur = 0
+                            boldMatches.forEach { bm ->
+                                if (bm.range.first > cur) {
+                                    // handle italic inside before bold
+                                    val before = p.substring(cur, bm.range.first)
+                                    val italicRegex = Regex("(\\*|_)([^*_]+?)\\1")
+                                    var iLast = 0
+                                    val imatches = italicRegex.findAll(before).toList()
+                                    if (imatches.isEmpty()) append(before) else {
+                                        imatches.forEach { im ->
+                                            if (im.range.first > iLast) append(before.substring(iLast, im.range.first))
+                                            withStyle(style = androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { append(im.groupValues[2]) }
+                                            iLast = im.range.last + 1
+                                        }
+                                        if (iLast < before.length) append(before.substring(iLast))
+                                    }
+                                }
+                                withStyle(style = androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) { append(bm.groupValues[1]) }
+                                cur = bm.range.last + 1
+                            }
+                            if (cur < p.length) {
+                                val after = p.substring(cur)
+                                val italicRegex = Regex("(\\*|_)([^*_]+?)\\1")
+                                var iLast = 0
+                                val imatches = italicRegex.findAll(after).toList()
+                                if (imatches.isEmpty()) append(after) else {
+                                    imatches.forEach { im ->
+                                        if (im.range.first > iLast) append(after.substring(iLast, im.range.first))
+                                        withStyle(style = androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { append(im.groupValues[2]) }
+                                        iLast = im.range.last + 1
+                                    }
+                                    if (iLast < after.length) append(after.substring(iLast))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+    androidx.compose.foundation.text.ClickableText(
+        text = annotated,
+        style = MaterialTheme.typography.bodyMedium.copy(color = color),
+        onClick = { offset ->
+            annotated.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()?.let { uriHandler.openUri(it.item) }
+        }
+    )
 }
 
 private fun renderFirstPdfPage(context: Context, uri: Uri): String {
