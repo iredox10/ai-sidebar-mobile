@@ -90,6 +90,8 @@ The initial OpenAI-compatible SSE client and its cancellable chat integration ar
 - Expand, collapse, open full app and stop controls.
 - Quick Settings tile and battery-optimization guidance.
 
+The overlay scaffold now includes a focusable compact chat card. It can stream through the saved OpenAI-compatible profile and explicitly append visible screen text to its draft. Overlay conversation history is in-memory for this milestone; shared Room history is next.
+
 ### Phase 5 — screen-aware assistant
 
 - Accessibility-service onboarding with plain-language disclosure.

@@ -15,16 +15,27 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.EditText
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.iredox.aisidebar.MainActivity
 import com.iredox.aisidebar.R
+import com.iredox.aisidebar.api.OpenAiCompatibleClient
+import com.iredox.aisidebar.api.ProviderConfig
+import com.iredox.aisidebar.api.RemoteChatMessage
+import com.iredox.aisidebar.api.StreamingRequest
+import com.iredox.aisidebar.data.ProviderSettingsStore
+import com.iredox.aisidebar.data.SecureKeyStore
+import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 
 /** A user-controlled foreground overlay. It never captures screen content by itself. */
 class OverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private var bubble: TextView? = null
     private var panel: LinearLayout? = null
+    private var activeRequest: StreamingRequest? = null
+    private val overlayMessages = mutableListOf<RemoteChatMessage>()
+    private val client = OpenAiCompatibleClient()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!Settings.canDrawOverlays(this)) {
@@ -59,22 +70,40 @@ class OverlayService : Service() {
     private fun showPanel() {
         bubble?.let { windowManager.removeView(it) }
         bubble = null
-        val params = overlayParams(width = 300.dp, height = WindowManager.LayoutParams.WRAP_CONTENT).apply {
+        val params = overlayParams(
+            width = 300.dp,
+            height = WindowManager.LayoutParams.WRAP_CONTENT,
+            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        ).apply {
             gravity = Gravity.BOTTOM or Gravity.END
             x = 16.dp
             y = 96.dp
         }
+        val response = label("Start a private conversation from any app.", 14f, Color.rgb(220, 220, 230), false)
+        val prompt = EditText(this).apply {
+            hint = "Ask AI Sidebar…"
+            setHintTextColor(Color.rgb(175, 175, 190))
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            maxLines = 4
+            background = roundedBackground(Color.rgb(48, 48, 66), 14.dp)
+            setPadding(12.dp, 8.dp, 12.dp, 8.dp)
+        }
+        val send = action("Send") { sendOverlayMessage(prompt, response) }
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18.dp, 16.dp, 18.dp, 16.dp)
             background = roundedBackground(Color.rgb(30, 30, 44), 22.dp)
             elevation = 18f
             addView(label("AI Sidebar", 18f, Color.WHITE, true))
-            addView(label("Ready for chat. Screen context will always require your explicit action.", 14f, Color.rgb(220, 220, 230), false).apply {
+            addView(response.apply {
                 setPadding(0, 8.dp, 0, 14.dp)
             })
+            addView(prompt)
+            addView(action("Add visible screen text") { attachScreenContext(prompt, response) })
+            addView(send)
             addView(action("Open full assistant") { openMainApp() })
-            addView(action("Collapse") { closePanel() }.apply { setPadding(0, 12.dp, 0, 0) })
+            addView(action("Collapse") { closePanel() }.apply { setPadding(0, 8.dp, 0, 0) })
         }
         windowManager.addView(panel, params)
     }
@@ -89,9 +118,50 @@ class OverlayService : Service() {
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    private fun overlayParams(width: Int, height: Int) = WindowManager.LayoutParams(
+    private fun sendOverlayMessage(prompt: EditText, response: TextView) {
+        if (activeRequest != null) {
+            activeRequest?.cancel()
+            activeRequest = null
+            response.text = "Response stopped."
+            return
+        }
+        val userText = prompt.text.toString().trim()
+        if (userText.isBlank()) return
+        val settings = ProviderSettingsStore(this).read()
+        val key = SecureKeyStore(this).readApiKey()
+        if (settings.provider != "OpenAI-compatible" || key.isNullOrBlank()) {
+            response.text = if (key.isNullOrBlank()) "Add an API key in the full app first." else "Select OpenAI-compatible in the full app to use this overlay chat."
+            return
+        }
+        overlayMessages += RemoteChatMessage("user", userText)
+        prompt.text.clear()
+        response.text = "Thinking…"
+        activeRequest = client.streamChat(
+            ProviderConfig(endpoint = settings.endpoint, apiKey = key, model = settings.model),
+            overlayMessages,
+            onDelta = { delta -> response.text = if (response.text == "Thinking…") delta else response.text.toString() + delta },
+            onComplete = {
+                overlayMessages += RemoteChatMessage("assistant", response.text.toString())
+                activeRequest = null
+            },
+            onError = { error -> response.text = "Connection error: $error"; activeRequest = null }
+        )
+    }
+
+    private fun attachScreenContext(prompt: EditText, response: TextView) {
+        val context = ScreenReadAccessibilityService.captureActiveScreen()
+        if (context?.visibleText.isNullOrBlank()) {
+            response.text = "Enable Accessibility in the full app, then try again."
+            return
+        }
+        val block = "[Visible screen context from ${context?.packageName ?: "current app"}]\n${context?.visibleText}"
+        prompt.append(if (prompt.text.isBlank()) block else "\n\n$block")
+        response.text = "Visible screen text was added to the draft. Review it before sending."
+    }
+
+    private fun overlayParams(width: Int, height: Int, flags: Int = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) = WindowManager.LayoutParams(
         width, height, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        flags, PixelFormat.TRANSLUCENT
     )
 
     private fun installDragBehavior(view: View, params: WindowManager.LayoutParams) {
@@ -159,6 +229,8 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        activeRequest?.cancel()
+        activeRequest = null
         bubble?.let { windowManager.removeView(it) }
         panel?.let { windowManager.removeView(it) }
         bubble = null
