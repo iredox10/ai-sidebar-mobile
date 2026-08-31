@@ -17,7 +17,15 @@ data class ProviderConfig(
     val temperature: Double? = 0.7
 )
 
-data class RemoteChatMessage(val role: String, val content: String, val imageDataUrl: String? = null, val imageDataUrls: List<String>? = null) {
+data class RemoteChatMessage(
+    val role: String,
+    val content: String,
+    val imageDataUrl: String? = null,
+    val imageDataUrls: List<String>? = null,
+    val toolCallId: String? = null,
+    val toolName: String? = null,
+    val toolCalls: List<ToolCall>? = null
+) {
     fun allImages(): List<String> = imageDataUrls ?: imageDataUrl?.let { listOf(it) } ?: emptyList()
 }
 
@@ -59,7 +67,9 @@ class OpenAiCompatibleClient {
         onDelta: (String) -> Unit,
         onComplete: () -> Unit,
         onError: (String) -> Unit,
-        onUsage: ((Long?, Long?) -> Unit)? = null
+        onUsage: ((Long?, Long?) -> Unit)? = null,
+        tools: JSONArray? = null,
+        onToolCalls: ((List<ToolCall>) -> Unit)? = null
     ): StreamingRequest {
         val request = StreamingRequest()
         Thread {
@@ -79,12 +89,33 @@ class OpenAiCompatibleClient {
                     put("stream", true)
                     config.temperature?.let { put("temperature", it) }
                     put("stream_options", JSONObject().put("include_usage", true))
+                    if (tools != null) put("tools", tools)
                     put("messages", JSONArray().apply {
                         if (!config.systemPrompt.isNullOrBlank()) {
                             put(JSONObject().put("role", "system").put("content", config.systemPrompt))
                         }
                         messages.forEach { message ->
-                            put(JSONObject().put("role", message.role).put("content", message.contentPayload()))
+                            when {
+                                message.role == "tool" -> put(JSONObject().apply {
+                                    put("role", "tool")
+                                    put("tool_call_id", message.toolCallId ?: "")
+                                    message.toolName?.let { put("name", it) }
+                                    put("content", message.content)
+                                })
+                                message.toolCalls != null -> put(JSONObject().apply {
+                                    put("role", "assistant")
+                                    put("content", message.content.ifEmpty { null })
+                                    put("tool_calls", JSONArray().apply {
+                                        message.toolCalls.forEach { tc ->
+                                            put(JSONObject().apply {
+                                                put("id", tc.id); put("type", "function")
+                                                put("function", JSONObject().apply { put("name", tc.name); put("arguments", tc.arguments) })
+                                            })
+                                        }
+                                    })
+                                })
+                                else -> put(JSONObject().put("role", message.role).put("content", message.contentPayload()))
+                            }
                         }
                     })
                 }
@@ -99,6 +130,7 @@ class OpenAiCompatibleClient {
                 }
                 var promptTok: Long? = null
                 var completionTok: Long? = null
+                val pendingToolCalls = mutableMapOf<Int, ToolCall>()
                 connection.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         if (request.cancelled || line == "data: [DONE]") return@forEach
@@ -112,13 +144,31 @@ class OpenAiCompatibleClient {
                         val content = delta?.optString("content")?.takeIf { it.isNotEmpty() }
                             ?: delta?.optString("reasoning_content")?.takeIf { it.isNotEmpty() }
                         if (!content.isNullOrEmpty()) mainThread { onDelta(content) }
+                        delta?.optJSONArray("tool_calls")?.let { arr ->
+                            for (i in 0 until arr.length()) {
+                                val tc = arr.optJSONObject(i) ?: continue
+                                val idx = tc.optInt("index", 0)
+                                val existing = pendingToolCalls[idx] ?: ToolCall(id = "", name = "", arguments = "")
+                                val id = tc.optString("id").takeIf { it.isNotEmpty() } ?: existing.id
+                                val func = tc.optJSONObject("function")
+                                val name = func?.optString("name")?.takeIf { it.isNotEmpty() } ?: existing.name
+                                val args = func?.optString("arguments")?.let { existing.arguments + it } ?: existing.arguments
+                                pendingToolCalls[idx] = ToolCall(id = id.ifEmpty { "call_${idx}_${System.currentTimeMillis()}" }, name = name, arguments = args)
+                            }
+                        }
                     }
                 }
+                val toolCalls = pendingToolCalls.values.filter { it.name.isNotEmpty() }
                 if (promptTok != null || completionTok != null) {
                     val pt = promptTok; val ct = completionTok
                     mainThread { onUsage?.invoke(pt, ct) }
                 }
-                if (!request.cancelled) mainThread(onComplete)
+                if (request.cancelled) return@Thread
+                if (toolCalls.isNotEmpty()) {
+                    mainThread { onToolCalls?.invoke(toolCalls) }
+                } else {
+                    mainThread(onComplete)
+                }
             } catch (error: Exception) {
                 if (!request.cancelled) mainThread { onError(error.message ?: "Could not connect to the provider.") }
             } finally {

@@ -166,6 +166,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     var customName by remember { mutableStateOf(savedProviderSettings.customName) }
     var customModels by remember { mutableStateOf(savedProviderSettings.customModels) }
     var tavilyKey by remember { mutableStateOf(secureKeyStore.readKey(SecureKeyStore.KEY_TAVILY).orEmpty()) }
+    var agenticTools by remember { mutableStateOf(savedProviderSettings.agenticTools) }
     var activeConversationId by remember { mutableStateOf(chatStore.activeConversationId() ?: System.currentTimeMillis()) }
     var conversationHistory by remember { mutableStateOf(chatStore.loadHistory()) }
     val messages = remember {
@@ -268,7 +269,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         when (destination) {
             Destination.CHAT -> ChatScreen(
                 Modifier.padding(padding), messages, provider, apiKey, endpoint, model,
-                systemPrompt, temperature, customBaseUrl, tavilyKey,
+                systemPrompt, temperature, customBaseUrl, tavilyKey, agenticTools,
                 persistMessages, sharedText, onSharedTextConsumed
             )
             Destination.HISTORY -> ChatHistory(
@@ -324,6 +325,11 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                     val current = providerSettingsStore.read()
                     providerSettingsStore.write(current.copy(customModels = it))
                 },
+                agenticTools, {
+                    agenticTools = it
+                    val current = providerSettingsStore.read()
+                    providerSettingsStore.write(current.copy(agenticTools = it))
+                },
                 tavilyKey, {
                     tavilyKey = it
                     secureKeyStore.writeKey(SecureKeyStore.KEY_TAVILY, it)
@@ -354,6 +360,7 @@ private fun ChatScreen(
     temperature: Float,
     customBaseUrl: String,
     tavilyKey: String,
+    agenticTools: Boolean,
     onMessagesChanged: () -> Unit,
     sharedText: String?,
     onSharedTextConsumed: () -> Unit
@@ -630,28 +637,75 @@ private fun ChatScreen(
                         messages[messageIndex] = messages[messageIndex].copy(text = "Add an API key for $provider under Settings to start streaming replies.")
                         onMessagesChanged()
                     } else {
-                        val outgoingMessages = messages.filter { it.id != responseId }
+                        val baseOutgoing = messages.filter { it.id != responseId }
                             .map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) }
                             .toMutableList()
-                        if (imgs.isNotEmpty() && outgoingMessages.isNotEmpty()) {
-                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = toSend, imageDataUrls = imgs)
-                        } else if (outgoingMessages.isNotEmpty()) {
-                            outgoingMessages[outgoingMessages.lastIndex] = outgoingMessages.last().copy(content = toSend)
+                        if (imgs.isNotEmpty() && baseOutgoing.isNotEmpty()) {
+                            baseOutgoing[baseOutgoing.lastIndex] = baseOutgoing.last().copy(content = toSend, imageDataUrls = imgs)
+                        } else if (baseOutgoing.isNotEmpty()) {
+                            baseOutgoing[baseOutgoing.lastIndex] = baseOutgoing.last().copy(content = toSend)
                         }
-                        activeRequest = streamForProvider(
-                            config = resolveConfig(),
-                            msgs = outgoingMessages,
-                            onDelta = { delta ->
-                                val messageIndex = messages.indexOfFirst { it.id == responseId }
-                                if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
-                            },
-                            onComplete = { activeRequest = null; onMessagesChanged() },
-                            onError = { error ->
-                                val messageIndex = messages.indexOfFirst { it.id == responseId }
-                                if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = "Connection error: $error")
-                                activeRequest = null; onMessagesChanged()
+                        val isAgenticProvider = provider.lowercase() in setOf("openai", "deepseek", "openrouter", "custom")
+                        if (agenticTools && isAgenticProvider) {
+                            // agentic tool loop up to 5 rounds
+                            var loopMessages = baseOutgoing.toMutableList()
+                            var round = 0
+                            fun doRound() {
+                                if (round >= 5) {
+                                    activeRequest = null; onMessagesChanged(); return
+                                }
+                                val cfg = resolveConfig()
+                                activeRequest = openAiClient.streamChat(
+                                    config = cfg,
+                                    messages = loopMessages,
+                                    onDelta = { delta ->
+                                        val idx = messages.indexOfFirst { it.id == responseId }
+                                        if (idx >= 0) messages[idx] = messages[idx].copy(text = messages[idx].text + delta)
+                                    },
+                                    onComplete = { activeRequest = null; onMessagesChanged() },
+                                    onError = { error ->
+                                        val idx = messages.indexOfFirst { it.id == responseId }
+                                        if (idx >= 0) messages[idx] = messages[idx].copy(text = "Connection error: $error")
+                                        activeRequest = null; onMessagesChanged()
+                                    },
+                                    onUsage = { pt, ct -> usageStore.record(provider.lowercase(), model, pt, ct) },
+                                    tools = com.iredox.aisidebar.api.toolDefinitionsForOpenAI(),
+                                    onToolCalls = { calls ->
+                                        screenContextNote = "Running: ${calls.joinToString { it.name }}"
+                                        // execute tools on background thread
+                                        Thread {
+                                            val results = calls.map { call -> call to com.iredox.aisidebar.api.runToolSync(context, call, tavilyKey.takeIf { it.isNotBlank() }) }
+                                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                                if (activeRequest == null) return@post
+                                                // append assistant tool_calls and tool results to loopMessages
+                                                loopMessages.add(com.iredox.aisidebar.api.RemoteChatMessage(role = "assistant", content = "", toolCalls = calls))
+                                                results.forEach { (call, res) ->
+                                                    loopMessages.add(com.iredox.aisidebar.api.RemoteChatMessage(role = "tool", content = res, toolCallId = call.id, toolName = call.name))
+                                                }
+                                                round++
+                                                doRound()
+                                            }
+                                        }.start()
+                                    }
+                                )
                             }
-                        )
+                            doRound()
+                        } else {
+                            activeRequest = streamForProvider(
+                                config = resolveConfig(),
+                                msgs = baseOutgoing,
+                                onDelta = { delta ->
+                                    val messageIndex = messages.indexOfFirst { it.id == responseId }
+                                    if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
+                                },
+                                onComplete = { activeRequest = null; onMessagesChanged() },
+                                onError = { error ->
+                                    val messageIndex = messages.indexOfFirst { it.id == responseId }
+                                    if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = "Connection error: $error")
+                                    activeRequest = null; onMessagesChanged()
+                                }
+                            )
+                        }
                     }
                 }
             }) { Icon(if (activeRequest == null) Icons.Default.Send else Icons.Default.Close, if (activeRequest == null) "Send" else "Stop response") }
@@ -1073,6 +1127,8 @@ private fun SettingsScreen(
     onCustomNameChange: (String) -> Unit,
     customModels: String,
     onCustomModelsChange: (String) -> Unit,
+    agenticTools: Boolean,
+    onAgenticToolsChange: (Boolean) -> Unit,
     tavilyKey: String,
     onTavilyKeyChange: (String) -> Unit,
     chatStore: ChatStore
@@ -1297,6 +1353,12 @@ private fun SettingsScreen(
                     Text(String.format(Locale.US, "%.1f", temperature), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 }
                 Slider(value = temperature, onValueChange = onTemperatureChange, valueRange = 0f..2f, steps = 19)
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Checkbox(checked = agenticTools, onCheckedChange = onAgenticToolsChange)
+                Text("Agent mode — let the AI search, fetch pages and check date (may use extra requests)", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
             }
         }
         item {
