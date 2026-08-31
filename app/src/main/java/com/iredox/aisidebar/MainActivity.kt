@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AssistChip
@@ -59,6 +60,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iredox.aisidebar.overlay.OverlayService
+import com.iredox.aisidebar.api.OpenAiCompatibleClient
+import com.iredox.aisidebar.api.ProviderConfig
+import com.iredox.aisidebar.api.RemoteChatMessage
+import com.iredox.aisidebar.api.StreamingRequest
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 
@@ -78,6 +83,8 @@ private enum class Role { USER, ASSISTANT }
 @Composable
 private fun SidebarApp() {
     var destination by remember { mutableStateOf(Destination.CHAT) }
+    var provider by remember { mutableStateOf("OpenAI-compatible") }
+    var apiKey by remember { mutableStateOf("") }
     val messages = remember {
         mutableStateListOf(
             ChatMessage(1, Role.ASSISTANT, "Hi — I’m AI Sidebar. Add your provider key in Settings, then I’ll be ready to help with text and (later) screen context.")
@@ -117,9 +124,9 @@ private fun SidebarApp() {
         }
     ) { padding ->
         when (destination) {
-            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages)
+            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
-            Destination.SETTINGS -> SettingsScreen(Modifier.padding(padding))
+            Destination.SETTINGS -> SettingsScreen(Modifier.padding(padding), provider, { provider = it }, apiKey, { apiKey = it })
         }
     }
 }
@@ -133,8 +140,10 @@ private fun NavItem(destination: Destination, selected: Boolean, icon: androidx.
 }
 
 @Composable
-private fun ChatScreen(modifier: Modifier, messages: MutableList<ChatMessage>) {
+private fun ChatScreen(modifier: Modifier, messages: MutableList<ChatMessage>, provider: String, apiKey: String) {
     var prompt by remember { mutableStateOf("") }
+    var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
+    val client = remember { OpenAiCompatibleClient() }
     Column(modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -162,12 +171,35 @@ private fun ChatScreen(modifier: Modifier, messages: MutableList<ChatMessage>) {
             Spacer(Modifier.width(10.dp))
             FloatingActionButton(onClick = {
                 val cleanPrompt = prompt.trim()
-                if (cleanPrompt.isNotEmpty()) {
+                if (activeRequest != null) {
+                    activeRequest?.cancel()
+                    activeRequest = null
+                } else if (cleanPrompt.isNotEmpty()) {
                     messages += ChatMessage(System.nanoTime(), Role.USER, cleanPrompt)
-                    messages += ChatMessage(System.nanoTime() + 1, Role.ASSISTANT, "Connect a provider in Settings to receive a live response. This local Phase 1 build has saved your prompt in the active chat UI.")
+                    val responseId = System.nanoTime() + 1
+                    messages += ChatMessage(responseId, Role.ASSISTANT, "")
                     prompt = ""
+                    if (provider != "OpenAI-compatible" || apiKey.isBlank()) {
+                        val messageIndex = messages.indexOfFirst { it.id == responseId }
+                        messages[messageIndex] = messages[messageIndex].copy(text = if (apiKey.isBlank()) "Add an API key under Settings to start streaming replies." else "$provider streaming will be added after the OpenAI-compatible path.")
+                    } else {
+                        activeRequest = client.streamChat(
+                            config = ProviderConfig(apiKey = apiKey),
+                            messages = messages.filter { it.id != responseId }.map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
+                            onDelta = { delta ->
+                                val messageIndex = messages.indexOfFirst { it.id == responseId }
+                                if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = messages[messageIndex].text + delta)
+                            },
+                            onComplete = { activeRequest = null },
+                            onError = { error ->
+                                val messageIndex = messages.indexOfFirst { it.id == responseId }
+                                if (messageIndex >= 0) messages[messageIndex] = messages[messageIndex].copy(text = "Connection error: $error")
+                                activeRequest = null
+                            }
+                        )
+                    }
                 }
-            }) { Icon(Icons.Default.Send, "Send") }
+            }) { Icon(if (activeRequest == null) Icons.Default.Send else Icons.Default.Close, if (activeRequest == null) "Send" else "Stop response") }
         }
     }
 }
@@ -207,10 +239,14 @@ private fun ChatHistory(modifier: Modifier, onNewChat: () -> Unit) {
 }
 
 @Composable
-private fun SettingsScreen(modifier: Modifier) {
+private fun SettingsScreen(
+    modifier: Modifier,
+    provider: String,
+    onProviderChange: (String) -> Unit,
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit
+) {
     val context = LocalContext.current
-    var provider by remember { mutableStateOf("OpenAI-compatible") }
-    var apiKey by remember { mutableStateOf("") }
     var contextResult by remember { mutableStateOf<String?>(null) }
     val overlayGranted = Settings.canDrawOverlays(context)
 
@@ -222,12 +258,12 @@ private fun SettingsScreen(modifier: Modifier) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("OpenAI-compatible", "Anthropic", "Google").forEach { name ->
-                    AssistChip(onClick = { provider = name }, label = { Text(name) }, leadingIcon = if (provider == name) ({ Text("✓") }) else null)
+                    AssistChip(onClick = { onProviderChange(name) }, label = { Text(name) }, leadingIcon = if (provider == name) ({ Text("✓") }) else null)
                 }
             }
         }
         item {
-            OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, modifier = Modifier.fillMaxWidth(), label = { Text("API key") }, placeholder = { Text("Stored securely in Phase 2") }, singleLine = true)
+            OutlinedTextField(value = apiKey, onValueChange = onApiKeyChange, modifier = Modifier.fillMaxWidth(), label = { Text("API key") }, placeholder = { Text("Kept only for this app session") }, singleLine = true)
         }
         item { Text("Overlay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         item {
