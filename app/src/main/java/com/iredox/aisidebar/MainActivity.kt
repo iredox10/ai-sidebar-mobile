@@ -81,6 +81,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -567,6 +568,7 @@ private fun MessageCard(
 @Composable
 private fun MarkdownMessageText(markdown: String, color: Color) {
     var inCodeBlock = false
+    val uriHandler = LocalUriHandler.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         markdown.lines().forEach { line ->
             when {
@@ -585,6 +587,11 @@ private fun MarkdownMessageText(markdown: String, color: Color) {
                 line.startsWith("## ") -> Text(line.removePrefix("## "), color = color, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 line.startsWith("# ") -> Text(line.removePrefix("# "), color = color, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 line.startsWith("- ") || line.startsWith("* ") -> Text("• ${line.drop(2)}", color = color)
+                line.startsWith("https://") || line.startsWith("http://") -> Text(
+                    line,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { uriHandler.openUri(line) }
+                )
                 line.isNotBlank() -> Text(line, color = color)
             }
         }
