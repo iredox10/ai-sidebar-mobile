@@ -81,6 +81,8 @@ The initial OpenAI-compatible SSE client and its cancellable chat integration ar
 - Anthropic and Google SSE adapters.
 - Model profiles and connection test action.
 - Markdown, copy/regenerate/edit-resend, TTS/STT and share input.
+
+Assistant replies now include a direct copy action. Regenerate, edit/resend, Markdown and speech controls remain subsequent chat-polish tasks.
 - Attach images, PDFs and text files, with bounded context size.
 
 The first image attachment path is implemented: the system picker creates a data-URL attachment capped at 5 MB and sends it in the standard OpenAI vision content format. Plain-text files can now be added as an explicitly labelled, 1 MB bounded draft context block. PDFs are handled transparently as a locally rendered first-page image attachment for vision-capable models; multi-page extraction is a later enhancement.

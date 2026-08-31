@@ -1,6 +1,8 @@
 package com.iredox.aisidebar
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
@@ -411,13 +413,24 @@ private fun ChatScreen(
 @Composable
 private fun MessageCard(message: ChatMessage) {
     val isUser = message.role == Role.USER
+    val context = LocalContext.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Card(
             modifier = Modifier.fillMaxWidth(0.87f),
             colors = CardDefaults.cardColors(containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
             shape = RoundedCornerShape(18.dp)
         ) {
-            Text(message.text, modifier = Modifier.padding(14.dp), color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.padding(14.dp)) {
+                Text(message.text, color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!isUser && message.text.isNotBlank()) {
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("AI Sidebar response", message.text))
+                    }, contentPadding = PaddingValues(top = 6.dp)) {
+                        Text("Copy")
+                    }
+                }
+            }
         }
     }
 }
