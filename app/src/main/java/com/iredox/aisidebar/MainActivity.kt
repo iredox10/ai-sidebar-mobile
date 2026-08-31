@@ -57,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iredox.aisidebar.overlay.OverlayService
@@ -85,6 +86,8 @@ private fun SidebarApp() {
     var destination by remember { mutableStateOf(Destination.CHAT) }
     var provider by remember { mutableStateOf("OpenAI-compatible") }
     var apiKey by remember { mutableStateOf("") }
+    var endpoint by remember { mutableStateOf("https://api.openai.com/v1/chat/completions") }
+    var model by remember { mutableStateOf("gpt-4o-mini") }
     val messages = remember {
         mutableStateListOf(
             ChatMessage(1, Role.ASSISTANT, "Hi — I’m AI Sidebar. Add your provider key in Settings, then I’ll be ready to help with text and (later) screen context.")
@@ -124,9 +127,12 @@ private fun SidebarApp() {
         }
     ) { padding ->
         when (destination) {
-            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey)
+            Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model)
             Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
-            Destination.SETTINGS -> SettingsScreen(Modifier.padding(padding), provider, { provider = it }, apiKey, { apiKey = it })
+            Destination.SETTINGS -> SettingsScreen(
+                Modifier.padding(padding), provider, { provider = it }, apiKey, { apiKey = it },
+                endpoint, { endpoint = it }, model, { model = it }
+            )
         }
     }
 }
@@ -140,7 +146,14 @@ private fun NavItem(destination: Destination, selected: Boolean, icon: androidx.
 }
 
 @Composable
-private fun ChatScreen(modifier: Modifier, messages: MutableList<ChatMessage>, provider: String, apiKey: String) {
+private fun ChatScreen(
+    modifier: Modifier,
+    messages: MutableList<ChatMessage>,
+    provider: String,
+    apiKey: String,
+    endpoint: String,
+    model: String
+) {
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
     val client = remember { OpenAiCompatibleClient() }
@@ -184,7 +197,7 @@ private fun ChatScreen(modifier: Modifier, messages: MutableList<ChatMessage>, p
                         messages[messageIndex] = messages[messageIndex].copy(text = if (apiKey.isBlank()) "Add an API key under Settings to start streaming replies." else "$provider streaming will be added after the OpenAI-compatible path.")
                     } else {
                         activeRequest = client.streamChat(
-                            config = ProviderConfig(apiKey = apiKey),
+                            config = ProviderConfig(endpoint = endpoint, apiKey = apiKey, model = model),
                             messages = messages.filter { it.id != responseId }.map { RemoteChatMessage(if (it.role == Role.USER) "user" else "assistant", it.text) },
                             onDelta = { delta ->
                                 val messageIndex = messages.indexOfFirst { it.id == responseId }
@@ -244,7 +257,11 @@ private fun SettingsScreen(
     provider: String,
     onProviderChange: (String) -> Unit,
     apiKey: String,
-    onApiKeyChange: (String) -> Unit
+    onApiKeyChange: (String) -> Unit,
+    endpoint: String,
+    onEndpointChange: (String) -> Unit,
+    model: String,
+    onModelChange: (String) -> Unit
 ) {
     val context = LocalContext.current
     var contextResult by remember { mutableStateOf<String?>(null) }
@@ -263,7 +280,34 @@ private fun SettingsScreen(
             }
         }
         item {
-            OutlinedTextField(value = apiKey, onValueChange = onApiKeyChange, modifier = Modifier.fillMaxWidth(), label = { Text("API key") }, placeholder = { Text("Kept only for this app session") }, singleLine = true)
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = onApiKeyChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("API key") },
+                placeholder = { Text("Kept only for this app session") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = endpoint,
+                onValueChange = onEndpointChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Chat completions endpoint") },
+                supportingText = { Text("OpenRouter, DeepSeek, and compatible private servers work here.") },
+                singleLine = true
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = model,
+                onValueChange = onModelChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Model") },
+                singleLine = true
+            )
         }
         item { Text("Overlay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         item {
