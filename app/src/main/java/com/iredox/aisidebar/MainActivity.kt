@@ -112,24 +112,47 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var sharedText by mutableStateOf<String?>(null)
+    private var sharedImageUri by mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        sharedText = extractSharedText(intent)
-        setContent { AISidebarTheme { SidebarApp(sharedText) { sharedText = null } } }
+        handleSharedIntent(intent)
+        setContent { SidebarApp(sharedText, sharedImageUri, onSharedTextConsumed = { sharedText = null }, onSharedImageConsumed = { sharedImageUri = null }) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        sharedText = extractSharedText(intent)
+        handleSharedIntent(intent)
     }
 
-    private fun extractSharedText(intent: Intent?): String? = when (intent?.action) {
-        Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
-        Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-        else -> null
-    }?.trim()?.takeIf { it.isNotEmpty() }
+    private fun handleSharedIntent(intent: Intent?) {
+        when (intent?.action) {
+            Intent.ACTION_SEND -> {
+                val type = intent.type ?: ""
+                when {
+                    type.startsWith("image/") -> {
+                        val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                        if (uri != null) sharedImageUri = uri else sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf { it.isNotEmpty() }
+                    }
+                    type.startsWith("text/") || type == "text/plain" -> {
+                        val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
+                        sharedText = text?.trim()?.takeIf { it.isNotEmpty() }
+                        val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                        if (stream != null) sharedImageUri = stream
+                    }
+                    else -> {
+                        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                        sharedText = text?.trim()?.takeIf { it.isNotEmpty() }
+                        val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                        if (stream != null) sharedImageUri = stream
+                    }
+                }
+            }
+            Intent.ACTION_PROCESS_TEXT -> sharedText = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            else -> {}
+        }
+    }
 }
 
 private enum class Destination(val label: String) { CHAT("Assistant"), HISTORY("Chats"), SETTINGS("Settings") }
@@ -149,8 +172,10 @@ private fun keyForProvider(provider: String): String = when (provider.lowercase(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
+private fun SidebarApp(sharedText: String?, sharedImageUri: Uri?, onSharedTextConsumed: () -> Unit, onSharedImageConsumed: () -> Unit) {
     val context = LocalContext.current
+    val themeStore = remember { com.iredox.aisidebar.data.ThemeStore(context.applicationContext) }
+    var theme by remember { mutableStateOf(themeStore.get()) }
     val secureKeyStore = remember { SecureKeyStore(context.applicationContext) }
     val chatStore = remember { ChatStore(context.applicationContext) }
     val providerSettingsStore = remember { ProviderSettingsStore(context.applicationContext) }
@@ -231,6 +256,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         conversationHistory = chatStore.loadHistory()
     }
 
+    AISidebarTheme(theme) {
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -269,8 +295,8 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         when (destination) {
             Destination.CHAT -> ChatScreen(
                 Modifier.padding(padding), messages, provider, apiKey, endpoint, model,
-                systemPrompt, temperature, customBaseUrl, tavilyKey, agenticTools,
-                persistMessages, sharedText, onSharedTextConsumed
+                systemPrompt, temperature, customBaseUrl, tavilyKey, agenticTools, sharedImageUri,
+                persistMessages, sharedText, onSharedTextConsumed, onSharedImageConsumed
             )
             Destination.HISTORY -> ChatHistory(
                 Modifier.padding(padding), conversationHistory,
@@ -334,9 +360,11 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                     tavilyKey = it
                     secureKeyStore.writeKey(SecureKeyStore.KEY_TAVILY, it)
                 },
+                theme, { theme = it; themeStore.set(it) },
                 chatStore
             )
         }
+    }
     }
 }
 
@@ -361,9 +389,11 @@ private fun ChatScreen(
     customBaseUrl: String,
     tavilyKey: String,
     agenticTools: Boolean,
+    sharedImageUri: Uri?,
     onMessagesChanged: () -> Unit,
     sharedText: String?,
-    onSharedTextConsumed: () -> Unit
+    onSharedTextConsumed: () -> Unit,
+    onSharedImageConsumed: () -> Unit
 ) {
     var prompt by remember { mutableStateOf("") }
     var activeRequest by remember { mutableStateOf<StreamingRequest?>(null) }
@@ -440,6 +470,22 @@ private fun ChatScreen(
         sharedText?.let {
             prompt = it
             onSharedTextConsumed()
+        }
+    }
+    LaunchedEffect(sharedImageUri) {
+        sharedImageUri?.let { uri ->
+            runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Could not read image")
+                require(bytes.size <= 5 * 1024 * 1024) { "Image must be 5 MB or smaller." }
+                val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                "data:$mime;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+            }.onSuccess {
+                if (imageDataUrls.size < 3) {
+                    imageDataUrls = imageDataUrls + it
+                    screenContextNote = "Shared image attached."
+                } else screenContextNote = "Shared image ignored — max 3 images."
+            }.onFailure { e -> screenContextNote = e.message ?: "Could not attach shared image." }
+            onSharedImageConsumed()
         }
     }
     fun resolveConfig(): ProviderConfig {
@@ -1131,6 +1177,8 @@ private fun SettingsScreen(
     onAgenticToolsChange: (Boolean) -> Unit,
     tavilyKey: String,
     onTavilyKeyChange: (String) -> Unit,
+    theme: String,
+    onThemeChange: (String) -> Unit,
     chatStore: ChatStore
 ) {
     val context = LocalContext.current
@@ -1150,6 +1198,8 @@ private fun SettingsScreen(
     var presets by remember { mutableStateOf(presetStore.load()) }
     var presetName by remember { mutableStateOf("") }
     var presetPrompt by remember { mutableStateOf("") }
+    val bookmarkStore = remember { com.iredox.aisidebar.data.BookmarkStore(context.applicationContext) }
+    var bookmarks by remember { mutableStateOf(bookmarkStore.load()) }
     val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -1249,6 +1299,14 @@ private fun SettingsScreen(
                             TextButton(onClick = { profileRenameOpen = false }) { Text("Cancel") }
                         }
                     }
+                }
+            }
+        }
+        item {
+            Text("Appearance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("system" to "System", "light" to "Light", "dark" to "Dark").forEach { (id, label) ->
+                    AssistChip(onClick = { onThemeChange(id) }, label = { Text(label) }, leadingIcon = if (theme == id) ({ Text("✓") }) else null)
                 }
             }
         }
@@ -1502,6 +1560,26 @@ private fun SettingsScreen(
                         Text("${usageStore.dayCount()} days kept", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+            }
+        }
+        item {
+            Text("Bookmarks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            val uriHandler = LocalUriHandler.current
+            LaunchedEffect(bookmarks) { }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (bookmarks.isEmpty()) {
+                    Text("No bookmarks saved — the AI can create them via tools.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    bookmarks.takeLast(20).reversed().forEach { bm ->
+                        Card(modifier = Modifier.fillMaxWidth().clickable { uriHandler.openUri(bm.url) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                            Column(Modifier.padding(10.dp)) {
+                                Text(bm.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                                Text(bm.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = { bookmarks = bookmarkStore.load() }) { Text("Refresh") }
             }
         }
         item {

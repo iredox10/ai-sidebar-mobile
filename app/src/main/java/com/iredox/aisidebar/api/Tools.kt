@@ -35,6 +35,16 @@ val AGENTIC_TOOLS: List<ToolDefinition> = listOf(
     }),
     ToolDefinition("current_date", "Get current date and time.", JSONObject().apply {
         put("type", "object"); put("properties", JSONObject())
+    }),
+    ToolDefinition("create_bookmark", "Save a bookmark for the user.", JSONObject().apply {
+        put("type", "object"); put("properties", JSONObject().apply {
+            put("title", JSONObject().put("type", "string")); put("url", JSONObject().put("type", "string"))
+        }); put("required", JSONArray().put("title").put("url"))
+    }),
+    ToolDefinition("download_file", "Trigger a file download with text content.", JSONObject().apply {
+        put("type", "object"); put("properties", JSONObject().apply {
+            put("filename", JSONObject().put("type", "string")); put("content", JSONObject().put("type", "string"))
+        }); put("required", JSONArray().put("filename").put("content"))
     })
 )
 
@@ -140,6 +150,36 @@ fun runToolSync(context: Context?, call: ToolCall, tavilyKey: String?): String {
                 }
             }
             "current_date" -> SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
+            "create_bookmark" -> {
+                val title = args.optString("title", "Bookmark")
+                val url = args.optString("url")
+                if (url.isBlank()) "Missing url"
+                else {
+                    context?.let { com.iredox.aisidebar.data.BookmarkStore(it).add(title, url) }
+                    "Created bookmark \"$title\" -> $url"
+                }
+            }
+            "download_file" -> {
+                val filename = args.optString("filename", "export.txt").replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                val content = args.optString("content", "")
+                if (context == null) "Download not supported without context"
+                else {
+                    try {
+                        val resolver = context.contentResolver
+                        val values = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, filename)
+                            put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                            put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                            put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                        }
+                        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Could not create download")
+                        resolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(content) }
+                        values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                        "Download started: $filename"
+                    } catch (e: Exception) { "Download failed: ${e.message}" }
+                }
+            }
             else -> "Unknown tool ${call.name}"
         }
     } catch (e: Exception) { "Tool error: ${e.message}" }
