@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.RecognizerIntent
@@ -667,6 +668,12 @@ private fun SettingsScreen(
     onModelChange: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val startOverlay = {
+        context.startForegroundService(Intent(context, OverlayService::class.java))
+    }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startOverlay()
+    }
     var contextResult by remember { mutableStateOf<String?>(null) }
     val overlayGranted = Settings.canDrawOverlays(context)
 
@@ -721,7 +728,11 @@ private fun SettingsScreen(
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = {
                         if (Settings.canDrawOverlays(context)) {
-                            context.startForegroundService(Intent(context, OverlayService::class.java))
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                startOverlay()
+                            }
                         } else {
                             context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
                         }

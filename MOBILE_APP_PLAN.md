@@ -120,6 +120,8 @@ Text sharing and `ACTION_PROCESS_TEXT` are now wired to prefill the assistant co
 
 `INTERNET`, `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `POST_NOTIFICATIONS` and an accessibility service are expected. Screen capture uses a separate MediaProjection consent flow when needed.
 
+The overlay onboarding requests the notification permission on Android 13+ immediately before starting the foreground service, keeping its required persistent notification visible and understandable.
+
 This is intended for personal sideloading. General-purpose accessibility-driven automation and cross-app capture create Play policy restrictions, so a public Play Store release would need a much narrower and policy-reviewed feature set.
 
 ## Acceptance checks by milestone
