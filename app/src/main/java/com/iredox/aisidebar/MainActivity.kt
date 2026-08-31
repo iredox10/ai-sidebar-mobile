@@ -253,7 +253,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
                 }, model, {
                     model = it
                     providerSettingsStore.write(ProviderSettings(provider, endpoint, model))
-                }
+                }, chatStore
             )
         }
     }
@@ -707,9 +707,19 @@ private fun SettingsScreen(
     endpoint: String,
     onEndpointChange: (String) -> Unit,
     model: String,
-    onModelChange: (String) -> Unit
+    onModelChange: (String) -> Unit,
+    chatStore: ChatStore
 ) {
     val context = LocalContext.current
+    var exportStatus by remember { mutableStateOf<String?>(null) }
+    val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(chatStore.exportHistory()) }
+                ?: error("Could not write the export.")
+        }.onSuccess { exportStatus = "Conversation backup saved." }
+            .onFailure { error -> exportStatus = error.message ?: "Could not export conversations." }
+    }
     val startOverlay = {
         context.startForegroundService(Intent(context, OverlayService::class.java))
     }
@@ -785,6 +795,12 @@ private fun SettingsScreen(
         item {
             Text("Privacy", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("Screen text is never captured automatically. In a later phase, you will explicitly attach safe visible screen content to a single prompt. Password and sensitive fields will be excluded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Text("Backup", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Button(onClick = { chatExporter.launch("ai-sidebar-mobile-chats.json") }) { Text("Export conversations") }
+            exportStatus?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp)) }
+            Text("Exports chats only. Your API key is never included.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {

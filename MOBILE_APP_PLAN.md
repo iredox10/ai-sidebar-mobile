@@ -112,6 +112,8 @@ The scaffold now includes accessibility onboarding plus an explicit visible-text
 - Open URL, save in-app bookmark, and download through MediaStore.
 - Prompt presets, auto-search decision, provider usage/cost dashboards and import/export.
 
+Conversation export is available now as a user-selected JSON document. It includes local conversations only and deliberately excludes all provider credentials. Import and extension-schema compatibility are subsequent work.
+
 The first tool path is now available as a user-triggered web search: DuckDuckGo instant-answer snippets are added as a labeled draft context block for review before the user sends the prompt. Plain URL lines in replies are tappable and open in the phone browser. Agentic tool loops and richer source browsing follow.
 
 Text sharing and `ACTION_PROCESS_TEXT` are now wired to prefill the assistant composer. Image, file, and URL sharing are subsequent additions.

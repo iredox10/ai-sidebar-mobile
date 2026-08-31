@@ -101,6 +101,24 @@ class ChatStore(context: Context) {
         saveConversation(existing.copy(title = cleanTitle, updatedAt = System.currentTimeMillis()))
     }
 
+    fun exportHistory(): String = JSONObject().apply {
+        put("format", "ai-sidebar-mobile")
+        put("version", 1)
+        put("exportedAt", System.currentTimeMillis())
+        put("conversations", JSONArray().apply {
+            loadHistory().forEach { saved ->
+                put(JSONObject().apply {
+                    put("id", saved.id)
+                    put("title", saved.title)
+                    put("updatedAt", saved.updatedAt)
+                    put("messages", JSONArray().apply {
+                        saved.messages.forEach { message -> put(JSONObject().put("id", message.id).put("role", message.role).put("text", message.text)) }
+                    })
+                })
+            }
+        })
+    }.toString(2)
+
     fun activeConversationId(): Long? = preferences.getLong(ACTIVE_ID_KEY, NO_CONVERSATION).takeIf { it != NO_CONVERSATION }
 
     fun setActiveConversationId(id: Long) {
