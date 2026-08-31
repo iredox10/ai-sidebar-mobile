@@ -720,6 +720,15 @@ private fun SettingsScreen(
         }.onSuccess { exportStatus = "Conversation backup saved." }
             .onFailure { error -> exportStatus = error.message ?: "Could not export conversations." }
     }
+    val chatImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val backup = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: error("Could not read the selected backup.")
+            chatStore.importHistory(backup)
+        }.onSuccess { count -> exportStatus = "Imported $count conversation${if (count == 1) "" else "s"}." }
+            .onFailure { error -> exportStatus = error.message ?: "Could not import conversations." }
+    }
     val startOverlay = {
         context.startForegroundService(Intent(context, OverlayService::class.java))
     }
@@ -798,9 +807,12 @@ private fun SettingsScreen(
         }
         item {
             Text("Backup", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Button(onClick = { chatExporter.launch("ai-sidebar-mobile-chats.json") }) { Text("Export conversations") }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { chatExporter.launch("ai-sidebar-mobile-chats.json") }) { Text("Export") }
+                Button(onClick = { chatImporter.launch(arrayOf("application/json")) }) { Text("Import") }
+            }
             exportStatus?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp)) }
-            Text("Exports chats only. Your API key is never included.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Backups contain chats only. API keys are never exported or imported.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {

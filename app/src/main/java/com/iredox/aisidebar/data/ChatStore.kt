@@ -119,6 +119,40 @@ class ChatStore(context: Context) {
         })
     }.toString(2)
 
+    fun importHistory(raw: String): Int {
+        val root = JSONObject(raw)
+        require(root.optString("format") == "ai-sidebar-mobile") { "This is not an AI Sidebar Mobile backup." }
+        val conversations = root.optJSONArray("conversations") ?: return 0
+        var imported = 0
+        for (index in 0 until conversations.length()) {
+            val item = conversations.optJSONObject(index) ?: continue
+            val messages = item.optJSONArray("messages") ?: continue
+            val savedMessages = buildList {
+                for (messageIndex in 0 until messages.length()) {
+                    val message = messages.optJSONObject(messageIndex)
+                    if (message != null) {
+                        val role = message.optString("role")
+                        if (role == "USER" || role == "ASSISTANT") {
+                            add(StoredChatMessage(message.optLong("id", System.currentTimeMillis()), role, message.optString("text")))
+                        }
+                    }
+                }
+            }
+            if (savedMessages.isNotEmpty()) {
+                saveConversation(
+                    StoredConversation(
+                        id = item.optLong("id", System.currentTimeMillis() + index),
+                        title = item.optString("title", "Imported conversation"),
+                        updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
+                        messages = savedMessages
+                    )
+                )
+                imported++
+            }
+        }
+        return imported
+    }
+
     fun activeConversationId(): Long? = preferences.getLong(ACTIVE_ID_KEY, NO_CONVERSATION).takeIf { it != NO_CONVERSATION }
 
     fun setActiveConversationId(id: Long) {
