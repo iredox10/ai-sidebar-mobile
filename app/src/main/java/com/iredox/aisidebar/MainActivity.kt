@@ -70,6 +70,7 @@ import com.iredox.aisidebar.api.StreamingRequest
 import com.iredox.aisidebar.data.SecureKeyStore
 import com.iredox.aisidebar.data.ChatStore
 import com.iredox.aisidebar.data.StoredChatMessage
+import com.iredox.aisidebar.data.StoredConversation
 import com.iredox.aisidebar.data.ProviderSettings
 import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
@@ -115,6 +116,8 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     var apiKey by remember { mutableStateOf(secureKeyStore.readApiKey().orEmpty()) }
     var endpoint by remember { mutableStateOf(savedProviderSettings.endpoint) }
     var model by remember { mutableStateOf(savedProviderSettings.model) }
+    var activeConversationId by remember { mutableStateOf(chatStore.activeConversationId() ?: System.currentTimeMillis()) }
+    var conversationHistory by remember { mutableStateOf(chatStore.loadHistory()) }
     val messages = remember {
         val restored = chatStore.loadMessages().map { ChatMessage(it.id, Role.valueOf(it.role), it.text) }
         mutableStateListOf<ChatMessage>().apply {
@@ -123,7 +126,36 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
         }
     }
     val persistMessages = {
-        chatStore.saveMessages(messages.map { StoredChatMessage(it.id, it.role.name, it.text) })
+        val storedMessages = messages.map { StoredChatMessage(it.id, it.role.name, it.text) }
+        chatStore.saveMessages(storedMessages)
+        chatStore.setActiveConversationId(activeConversationId)
+        chatStore.saveConversation(
+            StoredConversation(
+                id = activeConversationId,
+                title = conversationTitle(messages),
+                updatedAt = System.currentTimeMillis(),
+                messages = storedMessages
+            )
+        )
+        conversationHistory = chatStore.loadHistory()
+    }
+    val createNewConversation = {
+        persistMessages()
+        activeConversationId = System.currentTimeMillis()
+        messages.clear()
+        messages += ChatMessage(1, Role.ASSISTANT, "New conversation. How can I help?")
+        persistMessages()
+        destination = Destination.CHAT
+    }
+    val openConversation: (StoredConversation) -> Unit = { conversation ->
+        activeConversationId = conversation.id
+        messages.clear()
+        messages += conversation.messages.mapNotNull { stored ->
+            runCatching { ChatMessage(stored.id, Role.valueOf(stored.role), stored.text) }.getOrNull()
+        }
+        chatStore.saveMessages(conversation.messages)
+        chatStore.setActiveConversationId(conversation.id)
+        destination = Destination.CHAT
     }
 
     Scaffold(
@@ -160,7 +192,7 @@ private fun SidebarApp(sharedText: String?, onSharedTextConsumed: () -> Unit) {
     ) { padding ->
         when (destination) {
             Destination.CHAT -> ChatScreen(Modifier.padding(padding), messages, provider, apiKey, endpoint, model, persistMessages, sharedText, onSharedTextConsumed)
-            Destination.HISTORY -> ChatHistory(Modifier.padding(padding)) { destination = Destination.CHAT }
+            Destination.HISTORY -> ChatHistory(Modifier.padding(padding), conversationHistory, openConversation, createNewConversation)
             Destination.SETTINGS -> SettingsScreen(
                 Modifier.padding(padding), provider, {
                     provider = it
@@ -314,17 +346,32 @@ private fun MessageCard(message: ChatMessage) {
 }
 
 @Composable
-private fun ChatHistory(modifier: Modifier, onNewChat: () -> Unit) {
+private fun ChatHistory(
+    modifier: Modifier,
+    conversations: List<StoredConversation>,
+    onOpenConversation: (StoredConversation) -> Unit,
+    onNewChat: () -> Unit
+) {
     Column(modifier.fillMaxSize().padding(20.dp)) {
         Text("Your conversations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(18.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Phase 1 note", fontWeight = FontWeight.SemiBold)
-                Text("Room-backed chat history arrives in Phase 2. The current conversation is retained while the app stays open.")
+        if (conversations.isEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Text("Your saved conversations will appear here.", modifier = Modifier.padding(16.dp))
+            }
+            Spacer(Modifier.weight(1f))
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(conversations, key = { it.id }) { conversation ->
+                    Card(modifier = Modifier.fillMaxWidth().clickable { onOpenConversation(conversation) }) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(conversation.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${conversation.messages.size} messages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
             }
         }
-        Spacer(Modifier.weight(1f))
         Button(onClick = onNewChat, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Add, null)
             Spacer(Modifier.width(8.dp))
@@ -332,6 +379,10 @@ private fun ChatHistory(modifier: Modifier, onNewChat: () -> Unit) {
         }
     }
 }
+
+private fun conversationTitle(messages: List<ChatMessage>): String =
+    messages.firstOrNull { it.role == Role.USER }?.text?.replace('\n', ' ')?.take(56)?.ifBlank { null }
+        ?: "New conversation"
 
 @Composable
 private fun SettingsScreen(
