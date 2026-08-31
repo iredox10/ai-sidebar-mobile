@@ -63,6 +63,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -362,6 +363,9 @@ private fun ChatScreen(
     val webSearchClient = remember { WebSearchClient() }
     val usageStore = remember { com.iredox.aisidebar.data.UsageStore(context.applicationContext) }
     var attachmentMenuOpen by remember { mutableStateOf(false) }
+    val presetStore = remember { com.iredox.aisidebar.data.PresetStore(context.applicationContext) }
+    var presets by remember { mutableStateOf(presetStore.load()) }
+    LaunchedEffect(attachmentMenuOpen) { if (attachmentMenuOpen) presets = presetStore.load() }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -553,6 +557,17 @@ private fun ChatScreen(
                             }, { error -> screenContextNote = "Web search error: $error" })
                         }
                     })
+                    if (presets.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        presets.forEach { preset ->
+                            DropdownMenuItem(text = { Text(preset.name) }, onClick = {
+                                attachmentMenuOpen = false
+                                val applied = com.iredox.aisidebar.data.applyPresetPrompt(preset, prompt)
+                                prompt = applied
+                                screenContextNote = "Preset \"${preset.name}\" applied. Review before sending."
+                            })
+                        }
+                    }
                 }
             }
             OutlinedTextField(
@@ -907,6 +922,10 @@ private fun SettingsScreen(
     var profileRenameText by remember { mutableStateOf("") }
     val usageStore = remember { com.iredox.aisidebar.data.UsageStore(context.applicationContext) }
     var usageTick by remember { mutableStateOf(0) }
+    val presetStore = remember { com.iredox.aisidebar.data.PresetStore(context.applicationContext) }
+    var presets by remember { mutableStateOf(presetStore.load()) }
+    var presetName by remember { mutableStateOf("") }
+    var presetPrompt by remember { mutableStateOf("") }
     val chatExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching {
@@ -1133,6 +1152,40 @@ private fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Load models from endpoint") }
             modelStatus?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        item {
+            Text("Prompt Presets", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Quick prompts for the composer. Use {selection} for current draft and {page} for screen text.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = presetName, onValueChange = { presetName = it }, label = { Text("Name") }, placeholder = { Text("e.g. Explain") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = presetPrompt, onValueChange = { presetPrompt = it }, label = { Text("Prompt") }, placeholder = { Text("Explain this: {selection}") }, modifier = Modifier.fillMaxWidth(), minLines = 1)
+                Button(onClick = {
+                    if (presetName.trim().isNotBlank() && presetPrompt.trim().isNotBlank()) {
+                        val newList = presets + com.iredox.aisidebar.data.PromptPreset(presetName.trim(), presetPrompt.trim())
+                        presetStore.save(newList); presets = newList; presetName = ""; presetPrompt = ""
+                    }
+                }, modifier = Modifier.fillMaxWidth()) { Text("Add Preset") }
+                if (presets.isEmpty()) {
+                    Text("No presets yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    presets.forEachIndexed { idx, p ->
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(p.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(p.prompt, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                                TextButton(onClick = {
+                                    val newList = presets.toMutableList().apply { removeAt(idx) }
+                                    presetStore.save(newList); presets = newList
+                                }) { Text("Delete") }
+                            }
+                        }
+                    }
+                }
+            }
         }
         item { Text("Overlay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         item {
