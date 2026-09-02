@@ -20,7 +20,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -107,6 +109,7 @@ import com.iredox.aisidebar.data.ProviderSettings
 import com.iredox.aisidebar.data.ProviderSettingsStore
 import com.iredox.aisidebar.screen.ScreenReadAccessibilityService
 import com.iredox.aisidebar.tools.WebSearchClient
+import com.iredox.aisidebar.ui.ChromeFloatingHeader
 import com.iredox.aisidebar.ui.theme.AISidebarTheme
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -193,6 +196,7 @@ private fun SidebarApp(sharedText: String?, sharedImageUri: Uri?, onSharedTextCo
     var customModels by remember { mutableStateOf(savedProviderSettings.customModels) }
     var tavilyKey by remember { mutableStateOf(secureKeyStore.readKey(SecureKeyStore.KEY_TAVILY).orEmpty()) }
     var agenticTools by remember { mutableStateOf(savedProviderSettings.agenticTools) }
+    val headerModels = remember(provider) { defaultModelsFor(provider) }
     var activeConversationId by remember { mutableStateOf(chatStore.activeConversationId() ?: System.currentTimeMillis()) }
     var conversationHistory by remember { mutableStateOf(chatStore.loadHistory()) }
     val messages = remember {
@@ -260,27 +264,51 @@ private fun SidebarApp(sharedText: String?, sharedImageUri: Uri?, onSharedTextCo
     AISidebarTheme(theme) {
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(destination.label, fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 16.dp)
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center
-                    ) { Text("AI", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
-                },
-                actions = {
-                    IconButton(onClick = createNewConversation) {
-                        Icon(Icons.Default.Add, contentDescription = "Start new chat")
+            if (destination == Destination.CHAT) {
+                ChromeFloatingHeader(
+                    provider = provider,
+                    model = model,
+                    availableModels = headerModels,
+                    onModelChange = { newModel ->
+                        model = newModel
+                        val cur = providerSettingsStore.read()
+                        providerSettingsStore.write(cur.copy(model = newModel))
+                    },
+                    onProviderChange = { newProvider ->
+                        provider = newProvider
+                        apiKey = secureKeyStore.readKey(keyForProvider(newProvider)).orEmpty()
+                        val newModels = defaultModelsFor(newProvider)
+                        if (model !in newModels && newModels.isNotEmpty()) model = newModels[0]
+                        val cur = providerSettingsStore.read()
+                        providerSettingsStore.write(cur.copy(provider = newProvider, model = model))
+                    },
+                    onHistoryClick = { destination = Destination.HISTORY },
+                    onSettingsClick = { destination = Destination.SETTINGS },
+                    onNewChatClick = { createNewConversation() }
+                )
+            } else {
+                CenterAlignedTopAppBar(
+                    title = { Text(destination.label, fontWeight = FontWeight.SemiBold) },
+                    navigationIcon = {
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 16.dp)
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
+                        ) { Text("AI", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
+                    },
+                    actions = {
+                        IconButton(onClick = createNewConversation) {
+                            Icon(Icons.Default.Add, contentDescription = "Start new chat")
+                        }
+                        IconButton(onClick = { destination = Destination.SETTINGS }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Open settings")
+                        }
                     }
-                    IconButton(onClick = { destination = Destination.SETTINGS }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Open settings")
-                    }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
             Row(
@@ -556,7 +584,7 @@ private fun ChatScreen(
     Column(modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 72.dp, bottom = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -573,18 +601,34 @@ private fun ChatScreen(
             }
         }
         if (imageDataUrls.isNotEmpty()) {
-            Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${imageDataUrls.size} image(s) attached", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { imageDataUrls = emptyList(); screenContextNote = "Images removed." }) { Text("Clear") }
+            Card(
+                modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        Text("${imageDataUrls.size} image(s) attached", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { imageDataUrls = emptyList(); screenContextNote = "Images removed." }) { Text("Clear") }
+                    }
+                    Text("Files added as context for the next message", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
                 }
             }
         }
         quotedText?.let { q ->
-            Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(q.take(120) + if (q.length > 120) "…" else "", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    IconButton(onClick = { quotedText = null }) { Icon(Icons.Default.Close, "Remove quote") }
+            Card(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.ChatBubbleOutline, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                    }
+                    Text(q.take(120) + if (q.length > 120) "…" else "", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(start = 8.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    IconButton(onClick = { quotedText = null }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Remove quote", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp)) }
                 }
             }
         }
@@ -597,7 +641,13 @@ private fun ChatScreen(
             )
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom
         ) {
             Box {
@@ -662,13 +712,27 @@ private fun ChatScreen(
                 value = prompt,
                 onValueChange = { prompt = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask anything…") },
-                minLines = 2,
+                placeholder = { Text("Ask anything…", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                minLines = 1,
                 maxLines = 4,
-                shape = RoundedCornerShape(22.dp)
+                shape = RoundedCornerShape(0.dp),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                    unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                    focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                    unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                    cursorColor = MaterialTheme.colorScheme.primary
+                )
             )
-            Spacer(Modifier.width(10.dp))
-            FloatingActionButton(onClick = {
+            Spacer(Modifier.width(8.dp))
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(if (activeRequest != null) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.primary)
+                    .then(if (activeRequest != null) Modifier.border(1.dp, MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape) else Modifier)
+                    .clickable {
+
                 val cleanPrompt = prompt.trim()
                 if (activeRequest != null) {
                     activeRequest?.cancel(); activeRequest = null; onMessagesChanged()
@@ -759,7 +823,16 @@ private fun ChatScreen(
                         }
                     }
                 }
-            }) { Icon(if (activeRequest == null) Icons.Default.Send else Icons.Default.Close, if (activeRequest == null) "Send" else "Stop response") }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (activeRequest == null) Icons.Filled.Send else Icons.Filled.Close,
+                    contentDescription = if (activeRequest == null) "Send" else "Stop",
+                    tint = if (activeRequest == null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }
@@ -779,15 +852,20 @@ private fun MessageCard(
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Card(
-            modifier = Modifier.fillMaxWidth(0.87f),
-            colors = CardDefaults.cardColors(containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(18.dp)
+            modifier = Modifier.fillMaxWidth(if (isUser) 0.88f else 1f),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isUser) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isUser) 16.dp else 4.dp, bottomEnd = if (isUser) 4.dp else 16.dp),
+            border = if (isUser) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
-            Column(Modifier.padding(14.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 if (isUser) {
-                    Text(message.text, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(message.text, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
                 } else {
-                    MarkdownMessageText(message.text, MaterialTheme.colorScheme.onSurfaceVariant)
+                    MarkdownMessageText(message.text, MaterialTheme.colorScheme.onSurface)
                 }
                 if (!isUser && message.id != 1L && message.text.isNotBlank()) {
                     TextButton(onClick = {
